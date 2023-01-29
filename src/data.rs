@@ -1,5 +1,7 @@
 //! Data wrapper and type aliases used in the project.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crdts::List;
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +20,21 @@ pub type Topic = List<Log, Actor>;
 /// UNIX Timestamp. Uses 64 bit unsigned internally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Timestamp(u64);
+
+impl Timestamp {
+    pub fn now() -> Self {
+        Self(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        )
+    }
+
+    pub fn value(&self) -> u64 {
+        self.0
+    }
+}
 
 impl From<u64> for Timestamp {
     fn from(val: u64) -> Self {

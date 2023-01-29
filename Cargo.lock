@@ -87,10 +87,11 @@ checksum = "5827cebf4670468b8772dd191856768aedcb1b0278a04f989f7766351917b9dc"
 [[package]]
 name = "crdts"
 version = "7.2.0"
-source = "git+https://github.com/Limit-Lab/rust-crdt#688e8064d9a98b3f79aa2f1b8ab417f5713c731a"
+source = "git+https://github.com/Limit-Lab/rust-crdt#36b1f251bdd53edf95bcf8298b3ee4afef634c2e"
 dependencies = [
  "num",
  "quickcheck",
+ "rand 0.7.3",
  "serde",
  "tiny-keccak",
 ]
@@ -362,6 +363,7 @@ dependencies = [
  "autocfg",
  "num-integer",
  "num-traits",
+ "rand 0.7.3",
  "serde",
 ]
 
@@ -372,6 +374,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "747d632c0c558b87dbabbe6a82f3b4ae03720d0646ac5b7b4dae89394be5f2c5"
 dependencies = [
  "num-traits",
+ "rand 0.7.3",
  "serde",
 ]
 

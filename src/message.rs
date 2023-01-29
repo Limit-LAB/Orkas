@@ -40,18 +40,16 @@ pub enum MessageType {
 
 #[cfg(test)]
 mod test {
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::Duration;
 
     use crdts::{num::bigint::ToBigInt, CmRDT};
     use itertools::Itertools;
     use tokio::{select, sync::broadcast};
 
-    use crate::{Log, Topic};
+    use crate::{Log, Timestamp, Topic};
 
     #[tokio::test]
     async fn test_1() {
-        let mut topic = Topic::default();
-
         let (op_tx, mut op_rx) = broadcast::channel(1000);
 
         for actor in 0..200 {
@@ -62,21 +60,16 @@ mod test {
                 let mut rx = op_tx.subscribe();
                 loop {
                     select! {
-                        _ = {
-                            // let s = rand::thread_rng()
-                            // .gen_range(5)
-                            // .pipe(Duration::from_millis);
-                            tokio::time::sleep(Duration::from_millis(5))
-                        } => {
+                        _ = tokio::time::sleep(Duration::from_millis(5)) => {
                             iter -= 1;
-                            let now = SystemTime::now();
-                            let ts = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+
+                            let ts = Timestamp::now();
                             let new = Log {
                                 message: format!("{actor}:{iter}"),
-                                ts: ts.into(),
+                                ts,
                             };
+                            let op = topic.insert_id(ts.value().to_bigint().unwrap(), new, actor);
 
-                            let op = topic.insert_id(ts.to_bigint().unwrap(), new, actor);
 
                             topic.apply(op.clone());
                             op_tx.send(op).unwrap();
@@ -94,6 +87,8 @@ mod test {
         }
 
         drop(op_tx);
+
+        let mut topic = Topic::default();
 
         loop {
             let Ok(op) = op_rx.recv().await else { break };
