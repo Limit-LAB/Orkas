@@ -32,7 +32,9 @@ bincode = "1.3"
 tracing = "0.1"
 
 # CRDT
-crdts = "7.2.0"
+# crdts = "7.2.0"
+# crdts = { version = "7.2.0", path = "../rust-crdt" }
+crdts = { version = "7.2.0", git = "https://github.com/Limit-Lab/rust-crdt" }
 
 # Utils
 mod_use   = "0.2"
@@ -42,6 +44,7 @@ tap       = "1.0.1"
 [dev-dependencies]
 # Time format
 humantime = "2.1.0"
+itertools = "0.10.5"
 
 # Logger
 tracing-subscriber = "0.3"

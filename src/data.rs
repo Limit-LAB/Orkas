@@ -1,6 +1,6 @@
 //! Data wrapper and type aliases used in the project.
 
-use crdts::{List, MVReg, Map};
+use crdts::List;
 use serde::{Deserialize, Serialize};
 
 use crate::Log;
