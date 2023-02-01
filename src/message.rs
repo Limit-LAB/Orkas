@@ -4,8 +4,15 @@ use crdts::ctx::{AddCtx, ReadCtx, RmCtx};
 
 use crate::{Id, Log};
 
-/// Messages
+/// MessageSet
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct MessageSet {
+    pub message: Vec<MessageType>,
+}
+
+/// A single message
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+
 pub struct Message {
     pub sender: Id,
     #[serde(flatten)]
@@ -16,6 +23,12 @@ pub struct Message {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "_", content = "body")]
 pub enum MessageType {
+    SWIM(SWIMMessage),
+    CRDT(CRDTMessage),
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub enum SWIMMessage {
     /// Initial request to join a topic cluster
     Join {
         topic: String,
@@ -24,12 +37,19 @@ pub enum MessageType {
     /// Response to a join request
     JoinResponse {
         // A snapshot of the current state of the topic cluster to quickly populate the new node
+        // TODO: Use state-based updating instead of manually snapshotting
         snapshot: ReadCtx<HashSet<String>, u64>,
         // Responding message from foca
         swim: foca::Message<Id>,
     },
-    /// Swim messages
-    Swim(foca::Message<Id>),
+    /// Cluster membership (SWIM) messages
+    Cluster {
+        topic: String,
+        msg: foca::Message<Id>,
+    },
+}
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub enum CRDTMessage {
     /// Crdt add ctx
     CrdtAdd { ctx: AddCtx<u64> },
     /// Crdt remove ctx
