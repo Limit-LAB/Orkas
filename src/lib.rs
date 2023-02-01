@@ -8,7 +8,7 @@ use color_eyre::Result;
 use foca::{BincodeCodec, Foca, NoCustomBroadcast};
 use rand::rngs::ThreadRng;
 
-mod_use::mod_use![background, model, util, codec];
+mod_use::mod_use![tasks, model, util, codec];
 
 pub struct Orkas {
     pub foca: Foca<Id, BincodeCodec<DefaultOptions>, ThreadRng, NoCustomBroadcast>,
