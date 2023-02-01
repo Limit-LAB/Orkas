@@ -1,11 +1,14 @@
 //! Data wrapper and type aliases used in the project.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    net::SocketAddr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use crdts::List;
 use serde::{Deserialize, Serialize};
 
-use crate::Log;
+use crate::model::Log;
 
 /// Type for CRDT to identify actors and differentiate between them. This is
 /// used everytime on updating the logs map.
@@ -54,4 +57,31 @@ fn test_ts_serde() {
         bincode::serialize(&Timestamp(0)).unwrap(),
         bincode::serialize(&0u64).unwrap()
     );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Id {
+    addr: SocketAddr,
+    rev: u64, // TODO: use other id, like uuid
+}
+
+impl foca::Identity for Id {
+    fn renew(&self) -> Option<Self> {
+        let Self { addr, rev } = self;
+
+        Some(Self {
+            addr: *addr,
+            rev: rev.wrapping_add(1),
+        })
+    }
+
+    fn has_same_prefix(&self, other: &Self) -> bool {
+        self.addr == other.addr
+    }
+}
+
+impl From<SocketAddr> for Id {
+    fn from(addr: SocketAddr) -> Self {
+        Self { addr, rev: 0 }
+    }
 }

@@ -1,8 +1,15 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, net::SocketAddr};
 
 use crdts::ctx::{AddCtx, ReadCtx, RmCtx};
 
-use crate::{Id, Log};
+use crate::{model::Log, Id};
+
+/// Message with recipient that's ready to be sent
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct SendTo {
+    pub msg: MessageSet,
+    pub addr: SocketAddr,
+}
 
 /// MessageSet
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -66,7 +73,7 @@ mod test {
     use itertools::Itertools;
     use tokio::{select, sync::broadcast};
 
-    use crate::{Log, Timestamp, Topic};
+    use crate::{model::Log, Timestamp, Topic};
 
     #[tokio::test]
     async fn test_1() {

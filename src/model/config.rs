@@ -1,4 +1,4 @@
-use std::{error::Error, net::SocketAddr, sync::Arc};
+use std::net::SocketAddr;
 
 use color_eyre::Result;
 use quinn::ServerConfig;

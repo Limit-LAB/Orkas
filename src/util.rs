@@ -83,6 +83,15 @@ macro_rules! ok_or_break {
             }
         }
     }};
+    ($e:expr, $($arg:tt)*) => {{
+        match $e {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(error = %e, $($arg)*);
+                break;
+            }
+        }
+    }};
 }
 
 macro_rules! ok_or_return {
