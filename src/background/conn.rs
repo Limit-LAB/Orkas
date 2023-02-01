@@ -8,6 +8,7 @@ use std::{
     collections::{hash_map, HashMap},
     net::SocketAddr,
     sync::Arc,
+    time::Duration,
 };
 
 use color_eyre::Result;
@@ -25,8 +26,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{
-    adapt, ok_or_break, ok_or_continue, AdaptedSink, AdaptedStream, CRDTMessage, MessageSet,
-    MessageType, SWIMMessage, SendTo,
+    adapt, ok_or_continue, AdaptedSink, AdaptedStream, CRDTMessage, MessageSet, MessageType,
+    SWIMMessage, SendTo,
 };
 
 pub const DEFAULT_CHANNEL_SIZE: usize = 1 << 4;
@@ -160,15 +161,18 @@ async fn inbound_task(
                 Some(Ok(msgs)) => {
                     for msg in msgs.message {
                         match msg {
-                            MessageType::CRDT(msg) => ok_or_break!(ent.crdt.send(msg).await),
-                            MessageType::SWIM(msg) => ok_or_break!(ent.swim.send(msg).await)
+                            MessageType::CRDT(msg) => ok_or_continue!(ent.crdt.send(msg).await),
+                            MessageType::SWIM(msg) => ok_or_continue!(ent.swim.send(msg).await)
                         }
                     }
                 },
                 Some(Err(e)) => {
-                    warn!("Error in inbound stream: {}", e);
+                    warn!("Error while reading inbound stream: {}", e);
                 }
-                None => break,
+                None => {
+                    // `SelectAll` is empty. Sleep for a while.
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                },
             }
         }
     }
@@ -196,6 +200,7 @@ async fn outbound_task(
                         .map(|x| adapt::<_, _, MessageSet>(x.into_split()));
                     let (stream, sink) = ok_or_continue!(conn);
                     e.insert(sink);
+
                     // Continue even if inbound task is dropped
                     drop(ent.inbound.send(stream).await);
                 };

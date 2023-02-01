@@ -87,7 +87,7 @@ macro_rules! ok_or_break {
         match $e {
             Ok(x) => x,
             Err(e) => {
-                tracing::error!(error = %e, $($arg)*);
+                tracing::error!(error = %e, $($arg:)*);
                 break;
             }
         }
