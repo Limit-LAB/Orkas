@@ -7,208 +7,165 @@
 use std::{
     collections::{hash_map, HashMap},
     net::SocketAddr,
-    sync::Arc,
+    pin::pin,
     time::Duration,
 };
 
 use color_eyre::Result;
-use futures::{stream::SelectAll, SinkExt, StreamExt};
-use kanal::AsyncReceiver;
-use tokio::{
-    net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-        TcpStream,
-    },
-    select,
-    task::JoinHandle,
+use futures::{
+    future::{select, Either},
+    stream::SelectAll,
+    SinkExt, StreamExt,
 };
-use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use kanal::AsyncReceiver;
+use tokio::{net::TcpStream, select};
+use tracing::{debug, info, warn};
 
 use crate::{
-    adapt, ok_or_continue, AdaptedSink, AdaptedStream, CRDTMessage, MessageSet, MessageType,
-    SWIMMessage, SendTo,
+    codec::adapt,
+    model::{MessageType, SendTo},
+    tasks::{Context, Inbound, Outbound},
+    util::ok_or_continue,
+    Message,
 };
 
 pub const DEFAULT_CHANNEL_SIZE: usize = 1 << 4;
 
-type Inbound = AdaptedStream<OwnedReadHalf, MessageSet>;
-type Outbound = AdaptedSink<OwnedWriteHalf, MessageSet>;
-
-/// Entrance to background tasks. Contains all the channel sender.
-#[derive(Clone, Debug)]
-pub struct Entrance {
-    pub msg: kanal::AsyncSender<SendTo>,
-    pub crdt: kanal::AsyncSender<CRDTMessage>,
-    pub swim: kanal::AsyncSender<SWIMMessage>,
-    pub inbound: kanal::AsyncSender<Inbound>,
-    pub outbound: kanal::AsyncSender<(SocketAddr, Outbound)>,
-}
-
-#[derive(Debug)]
-pub struct BackgroundHandle {
-    inbound: JoinHandle<Result<()>>,
-    outbound: JoinHandle<Result<()>>,
-    listener: JoinHandle<Result<()>>,
-    cancel_token: CancellationToken,
-    entrance: Arc<Entrance>,
-}
-
-impl BackgroundHandle {
-    pub fn is_running(&self) -> bool {
-        !(self.cancel_token.is_cancelled()
-            || self.inbound.is_finished()
-            || self.outbound.is_finished()
-            || self.listener.is_finished())
-    }
-
-    pub fn entrance(&self) -> &Entrance {
-        &self.entrance
-    }
-
-    pub fn entrance_shared(&self) -> Arc<Entrance> {
-        self.entrance.clone()
-    }
-
-    /// Issue a cancellation request to the background tasks.
-    pub fn cancel(&self) {
-        self.cancel_token.cancel();
-    }
-
-    pub fn cancel_token(&self) -> &CancellationToken {
-        &self.cancel_token
-    }
-
-    /// Forcefully shutdown the background tasks with [`JoinHandle::abort`].
-    ///
-    /// [`JoinHandle::abort`]: tokio::task::JoinHandle::abort
-    pub fn force_shutdown(self) {
-        self.cancel();
-        self.inbound.abort();
-        self.outbound.abort();
-        self.listener.abort();
-    }
-
-    /// Wait for the background tasks to finish. Use with
-    /// [`BackgroundHandle::cancel`] to gracefully shutdown the background
-    /// tasks.
-    pub async fn join(self) -> Result<()> {
-        self.inbound.await??;
-        self.outbound.await??;
-        self.listener.await??;
-        Ok(())
-    }
-}
-
-pub fn spawn_connections(
-    bind: SocketAddr,
-) -> (
-    BackgroundHandle,
-    AsyncReceiver<CRDTMessage>,
-    AsyncReceiver<SWIMMessage>,
-) {
-    let (crdt, crdt_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-    let (swim, swim_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-    let (inbound, inbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-    let (outbound, outbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-    let (msg, msg_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-
-    let entrance = Arc::new(Entrance {
-        msg,
-        crdt,
-        swim,
-        inbound,
-        outbound,
-    });
-
-    let cancel_token = CancellationToken::new();
-
-    let inbound = tokio::spawn(inbound_task(
-        inbound_rx,
-        entrance.clone(),
-        cancel_token.clone(),
-    ));
-    let outbound = tokio::spawn(outbound_task(
-        msg_rx,
-        outbound_rx,
-        entrance.clone(),
-        cancel_token.clone(),
-    ));
-    let listener = tokio::spawn(listener_task(bind, entrance.clone(), cancel_token.clone()));
-    let handle = BackgroundHandle {
-        entrance,
-        inbound,
-        outbound,
-        listener,
-        cancel_token,
-    };
-    (handle, crdt_rx, swim_rx)
-}
-
-async fn inbound_task(
-    recv: AsyncReceiver<Inbound>,
-    ent: Arc<Entrance>,
-    t: CancellationToken,
-) -> Result<()> {
+/// Aggregate all inbound data and dispatch them to corresponding handler.
+pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: Context) -> Result<()> {
     let mut streams = SelectAll::<Inbound>::new();
     loop {
-        if t.is_cancelled() {
+        if ctx.cancel_token.is_cancelled() {
             break;
         }
-        select! {
-            stream = recv.recv() => streams.push(stream?),
-            msg = streams.next() => match msg {
-                Some(Ok(msgs)) => {
-                    for msg in msgs.message {
-                        match msg {
-                            MessageType::CRDT(msg) => ok_or_continue!(ent.crdt.send(msg).await),
-                            MessageType::SWIM(msg) => ok_or_continue!(ent.swim.send(msg).await)
+
+        match select(pin!(recv.recv()), pin!(streams.next())).await {
+            Either::Left((stream, _)) => streams.push(stream?),
+            Either::Right((msgs, _)) => match msgs {
+                Some(Ok(set)) => {
+                    for msg in set.message {
+                        let Message {
+                            sender,
+                            id,
+                            topic,
+                            body,
+                        } = msg;
+                        match body {
+                            MessageType::CRDT(crdt) => {
+                                ok_or_continue!(
+                                    "inbound",
+                                    ctx.crdt_inbound.send((topic, crdt)).await
+                                )
+                            }
+                            MessageType::SWIM(swim) => {
+                                if let Some(handle) = ctx.topics.get(&topic) {
+                                    ok_or_continue!(
+                                        "inbound",
+                                        handle.swim.sender.send(swim.data).await
+                                    );
+                                } else {
+                                    info!(
+                                        target: "inbound",
+                                        message_type = "swim",
+                                        sender = %msg.sender,
+                                        topic,
+                                        "Non-exist topic, ignore",
+                                    );
+                                };
+                            }
+                            MessageType::Join { id, swim_data } => {
+                                if let Some(handle) = ctx.topics.get(&topic) {
+                                    todo!("handle join request")
+                                } else {
+                                    info!(
+                                        target: "inbound",
+                                        message_type = "join",
+                                        sender = %msg.sender,
+                                        topic,
+                                        "Non-exist topic, ignore",
+                                    );
+                                };
+                            }
+                            MessageType::JoinResponse {
+                                respond_to,
+                                swim_data,
+                                snapshot,
+                            } => {
+                                if let Some(mut handle) = ctx.topics.get_mut(&topic) {
+                                    handle.logs = snapshot;
+                                    handle.swim.sender.send(swim_data).await?;
+                                } else {
+                                    info!(
+                                        target: "inbound",
+                                        message_type = "join_response",
+                                        sender = %msg.sender,
+                                        topic,
+                                        "Non-exist topic, ignore",
+                                    );
+                                };
+                            }
                         }
                     }
-                },
+                }
                 Some(Err(e)) => {
                     warn!("Error while reading inbound stream: {}", e);
                 }
                 None => {
                     // `SelectAll` is empty. Sleep for a while.
                     tokio::time::sleep(Duration::from_millis(100)).await;
-                },
-            }
+                }
+            },
         }
     }
     Ok(())
 }
 
-async fn outbound_task(
+/// Aggregate all outbound data and dispatch them to corresponding targets.
+pub(super) async fn outbound_task(
     msg_recv: AsyncReceiver<SendTo>,
     conn_recv: AsyncReceiver<(SocketAddr, Outbound)>,
-    ent: Arc<Entrance>,
-    t: CancellationToken,
+    ctx: Context,
 ) -> Result<()> {
+    // TODO: maybe change this to LRU?
     let mut map = HashMap::with_capacity(1 << 4);
 
     loop {
-        if t.is_cancelled() {
+        if ctx.cancel_token.is_cancelled() {
             break;
         }
         select! {
             msg = msg_recv.recv() => {
                 let msg = msg?;
-                if let hash_map::Entry::Vacant(e) = map.entry(msg.addr) {
-                    let conn = TcpStream::connect(msg.addr)
-                        .await
-                        .map(|x| adapt::<_, _, MessageSet>(x.into_split()));
-                    let (stream, sink) = ok_or_continue!(conn);
-                    e.insert(sink);
+                // TODO: better retry
+                let mut retry = 3;
+                loop {
+                    if retry == 0 {
+                        warn!(target: "outbound", address = %msg.addr, "Failed to send message");
+                        break;
+                    }
+                    if let hash_map::Entry::Vacant(entry) = map.entry(msg.addr) {
+                        let conn = TcpStream::connect(msg.addr)
+                            .await
+                            .map(|s| adapt(s.into_split()));
+                        let (stream, sink) = ok_or_continue!("outbound", conn);
+                        entry.insert(sink);
 
-                    // Continue even if inbound task is dropped
-                    drop(ent.inbound.send(stream).await);
-                };
-                let conn = map.get_mut(&msg.addr).unwrap();
-                ok_or_continue!(conn.send(msg.msg).await)
+                        // Continue even if inbound has stopped
+                        drop(ctx.conn_inbound.send(stream).await);
+                    };
+                    let conn = map.get_mut(&msg.addr).unwrap();
+                    match conn.send(msg.msg.clone()).await {
+                        Ok(_) => break,
+                        Err(e) => {
+                            debug!(target: "outbound", error = %e, "Connection disconnected, retry");
+                            map.remove(&msg.addr);
+                        }
+                    }
+                    retry -= 1;
+                }
             },
             conn = conn_recv.recv() => {
-                let (addr, conn) = ok_or_continue!(conn);
+                let (addr, conn) = ok_or_continue!("outbound", conn);
                 map.insert(addr, conn);
             }
         }
@@ -216,18 +173,19 @@ async fn outbound_task(
     Ok(())
 }
 
-async fn listener_task(bind: SocketAddr, ent: Arc<Entrance>, t: CancellationToken) -> Result<()> {
+/// Accept income connections and send them to the inbound and outbound task
+pub(super) async fn listener_task(bind: SocketAddr, ent: Context) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(bind).await?;
     loop {
-        if t.is_cancelled() {
+        if ent.cancel_token.is_cancelled() {
             break;
         }
-        let (stream, addr) = ok_or_continue!(listener.accept().await);
-        tracing::debug!("New connection from {}", addr);
-        let (stream, sink) = adapt::<_, _, MessageSet>(stream.into_split());
+        let (stream, src) = ok_or_continue!("listener", listener.accept().await);
+        tracing::trace!(target: "listener", %src, "New connection");
+        let (stream, sink) = adapt(stream.into_split());
         match (
-            ent.inbound.send(stream).await,
-            ent.outbound.send((addr, sink)).await,
+            ent.conn_inbound.send(stream).await,
+            ent.conn_outbound.send((src, sink)).await,
         ) {
             (Ok(_), Ok(_)) => {}
             (Err(e), _) | (_, Err(e)) => tracing::error!("Error in listener: {}", e),

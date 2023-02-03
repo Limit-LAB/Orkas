@@ -10,41 +10,42 @@ use tap::Pipe;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
 
-pub type AdaptedStream<R: AsyncRead, T: DeserializeOwned> = impl Stream<Item = Result<T>>;
-pub type AdaptedSink<W: AsyncWrite, T: Serialize> = impl Sink<T, Error = color_eyre::eyre::Error>;
+use crate::model::MessageSet;
 
-pub fn adapt<R, W, T>(stream: (R, W)) -> (AdaptedStream<R, T>, AdaptedSink<W, T>)
+pub type MessageStream<R: AsyncRead> = impl Stream<Item = Result<MessageSet>>;
+pub type MessageSink<W: AsyncWrite> = impl Sink<MessageSet, Error = color_eyre::eyre::Error>;
+
+pub fn adapt<R, W>(stream: (R, W)) -> (MessageStream<R>, MessageSink<W>)
 where
     R: AsyncRead,
     W: AsyncWrite,
-    T: Serialize + DeserializeOwned,
 {
     let (r, w) = stream;
-    let codec = SerdeBincodeCodec::<T, _>::new();
+    let codec = SerdeBincodeCodec::new();
     let stream = FramedRead::new(r, codec);
     let sink = FramedWrite::new(w, codec);
     (stream, sink)
 }
 
-pub fn adapt_with_option<R, W, T, O>(
-    stream: (R, W),
-    option: O,
-) -> (
-    impl Stream<Item = Result<T>>,
-    impl Sink<T, Error = color_eyre::eyre::Error>,
-)
-where
-    R: AsyncRead,
-    W: AsyncWrite,
-    T: Serialize + DeserializeOwned,
-    O: bincode::Options + Clone,
-{
-    let (r, w) = stream;
-    let codec = SerdeBincodeCodec::<T, O>::with_option(option);
-    let stream = FramedRead::new(r, codec.clone());
-    let sink = FramedWrite::new(w, codec);
-    (stream, sink)
-}
+// pub fn adapt_with_option<R, W, T, O>(
+//     stream: (R, W),
+//     option: O,
+// ) -> (
+//     impl Stream<Item = Result<T>>,
+//     impl Sink<T, Error = color_eyre::eyre::Error>,
+// )
+// where
+//     R: AsyncRead,
+//     W: AsyncWrite,
+//     T: Serialize + DeserializeOwned,
+//     O: bincode::Options + Clone,
+// {
+//     let (r, w) = stream;
+//     let codec = SerdeBincodeCodec::<T, O>::with_option(option);
+//     let stream = FramedRead::new(r, codec.clone());
+//     let sink = FramedWrite::new(w, codec);
+//     (stream, sink)
+// }
 
 /// A codec that uses consecutive bincode to serialize and deserialize
 /// messages.

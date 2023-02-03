@@ -52,6 +52,37 @@ macro_rules! impl_cloneable {
     };
 }
 
+pub trait CRDTUpdater {
+    type Error: std::error::Error;
+    fn update(self, topic: &mut LogList, actor: Actor) -> std::result::Result<LogOp, Self::Error>;
+}
+
+impl<E: std::error::Error, F: FnOnce(&mut LogList) -> std::result::Result<LogOp, E>> CRDTUpdater
+    for F
+{
+    type Error = E;
+
+    fn update(self, op: &mut LogList, actor: Actor) -> std::result::Result<LogOp, Self::Error> {
+        self(op)
+    }
+}
+
+pub trait CRDTReader {
+    type Return;
+    fn read(self, topic: &LogList) -> Self::Return;
+}
+
+impl<T, F> CRDTReader for F
+where
+    F: FnOnce(&LogList) -> T,
+{
+    type Return = T;
+
+    fn read(self, op: &LogList) -> T {
+        self(op)
+    }
+}
+
 #[rustfmt::skip]
 mod impls {
     use super::CloneableTuple;
@@ -106,13 +137,13 @@ macro_rules! ok_or_return {
     }};
 }
 
-// TODO: Implement retry machenism
+// TODO: implement retry machenism
 macro_rules! ok_or_continue {
-    ($e:expr) => {{
+    ($target:literal, $e:expr) => {{
         match $e {
             Ok(x) => x,
             Err(e) => {
-                tracing::warn!("{e}");
+                tracing::warn!(target: $target, error = %e, "Error, continue");
                 continue;
             }
         }
@@ -122,3 +153,5 @@ macro_rules! ok_or_continue {
 pub(crate) use ok_or_break;
 pub(crate) use ok_or_continue;
 pub(crate) use ok_or_return;
+
+use crate::model::{Actor, LogList, LogOp};
