@@ -3,17 +3,16 @@
 #![feature(type_alias_impl_trait)]
 #![feature(once_cell)]
 
-use std::{net::SocketAddr, ops::Deref};
+use std::net::SocketAddr;
 
 use bincode::DefaultOptions;
 use color_eyre::Result;
-use foca::{BincodeCodec, Foca, Notification};
+use foca::{BincodeCodec, Foca};
 use rand::{rngs::StdRng, thread_rng, SeedableRng};
 use tap::Pipe;
 
 pub use crate::model::*;
 use crate::{
-    codec::adapt,
     model::{Id, LogList, OrkasConfig, Topic},
     tasks::{spawn_background, spawn_swim, Background, Context, SWIM},
     util::{CRDTReader, CRDTUpdater},
@@ -23,6 +22,8 @@ mod codec;
 mod model;
 mod tasks;
 mod util;
+
+pub use codec::{adapt, adapt_with_option, SerdeBincodeCodec};
 
 pub struct Orkas {
     pub config: OrkasConfig,
@@ -66,16 +67,20 @@ impl Orkas {
             .into_split()
             .pipe(adapt);
 
-        let swim: SWIM = Foca::new(
+        let mut swim: SWIM = Foca::new(
             Id::from(self.config.bind),
             self.config.foca.clone(),
             StdRng::from_rng(thread_rng())?,
             BincodeCodec(DefaultOptions::new()),
         );
 
-        // swim.announce(addr.into(), );
+        {
+            let mut rt = ctx.swim_runtime(&topic);
 
-        // TODO: init swim
+            swim.announce(addr.into(), &mut rt)?;
+
+            rt.flush().await?;
+        }
 
         ctx.conn_inbound.send(send).await?;
         ctx.conn_outbound.send((addr, recv)).await?;
@@ -103,6 +108,6 @@ impl Orkas {
         self.ctx()
             .topics
             .get(topic.as_ref())
-            .map(|x| func.read(&x.deref().logs))
+            .map(|x| func.read(&x.value().logs))
     }
 }

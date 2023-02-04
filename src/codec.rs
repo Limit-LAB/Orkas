@@ -10,10 +10,10 @@ use tap::Pipe;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
 
-use crate::model::MessageSet;
+use crate::Envelope;
 
-pub type MessageStream<R: AsyncRead> = impl Stream<Item = Result<MessageSet>>;
-pub type MessageSink<W: AsyncWrite> = impl Sink<MessageSet, Error = color_eyre::eyre::Error>;
+pub type MessageStream<R: AsyncRead> = impl Stream<Item = Result<Envelope>>;
+pub type MessageSink<W: AsyncWrite> = impl Sink<Envelope, Error = color_eyre::eyre::Error>;
 
 pub fn adapt<R, W>(stream: (R, W)) -> (MessageStream<R>, MessageSink<W>)
 where
@@ -27,25 +27,25 @@ where
     (stream, sink)
 }
 
-// pub fn adapt_with_option<R, W, T, O>(
-//     stream: (R, W),
-//     option: O,
-// ) -> (
-//     impl Stream<Item = Result<T>>,
-//     impl Sink<T, Error = color_eyre::eyre::Error>,
-// )
-// where
-//     R: AsyncRead,
-//     W: AsyncWrite,
-//     T: Serialize + DeserializeOwned,
-//     O: bincode::Options + Clone,
-// {
-//     let (r, w) = stream;
-//     let codec = SerdeBincodeCodec::<T, O>::with_option(option);
-//     let stream = FramedRead::new(r, codec.clone());
-//     let sink = FramedWrite::new(w, codec);
-//     (stream, sink)
-// }
+pub fn adapt_with_option<R, W, T, O>(
+    stream: (R, W),
+    option: O,
+) -> (
+    impl Stream<Item = Result<T>>,
+    impl Sink<T, Error = color_eyre::eyre::Error>,
+)
+where
+    R: AsyncRead,
+    W: AsyncWrite,
+    T: Serialize + DeserializeOwned,
+    O: bincode::Options + Clone,
+{
+    let (r, w) = stream;
+    let codec = SerdeBincodeCodec::<T, O>::with_option(option);
+    let stream = FramedRead::new(r, codec.clone());
+    let sink = FramedWrite::new(w, codec);
+    (stream, sink)
+}
 
 /// A codec that uses consecutive bincode to serialize and deserialize
 /// messages.

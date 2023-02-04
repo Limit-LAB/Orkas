@@ -1,9 +1,9 @@
-mod_use::mod_use![conn, crdt, swim];
+mod_use::mod_use![conn, swim];
 
-use std::{net::SocketAddr, ops::DerefMut, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
 use color_eyre::{eyre::bail, Result};
-use dashmap::DashMap;
+use crossbeam_skiplist::SkipMap;
 use futures::future::join_all;
 use tap::Pipe;
 use tokio::{
@@ -14,8 +14,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     codec::{MessageSink, MessageStream},
-    model::{Actor, CRDTMessage, SendTo, State, Topic},
+    model::{Actor, Envelope, State, Topic},
     util::CRDTUpdater,
+    Broadcast, InternalMessage,
 };
 
 type Inbound = MessageStream<OwnedReadHalf>;
@@ -27,44 +28,38 @@ type Outbound = MessageSink<OwnedWriteHalf>;
 /// all fields are behind reference count thus all instances targets to same
 /// objects.
 #[derive(Clone)]
-pub(crate) struct Context {
-    pub msg: kanal::AsyncSender<SendTo>,
-    pub crdt_inbound: kanal::AsyncSender<(String, CRDTMessage)>,
+pub struct Context {
+    pub msg: kanal::AsyncSender<Envelope>,
     pub conn_inbound: kanal::AsyncSender<Inbound>,
     pub conn_outbound: kanal::AsyncSender<(SocketAddr, Outbound)>,
-    pub topics: Arc<DashMap<String, Topic>>,
+    pub topics: Arc<SkipMap<String, Topic>>,
     cancel_token: CancellationToken,
-    // foca_topics: Arc<DashMap<String, Foca<>>>,
 }
 
 pub fn spawn_background(bind: SocketAddr) -> Background {
-    let (crdt_inbound, crdt_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
     let (conn_inbound, inbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
     let (conn_outbound, outbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
     let (msg, msg_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
 
     let cancel_token = CancellationToken::new();
-    let crdt_topics = DashMap::new().pipe(Arc::new);
+    let topics = SkipMap::new().pipe(Arc::new);
 
     let ctx = Context {
         msg,
-        crdt_inbound,
         conn_inbound,
         conn_outbound,
-        topics: crdt_topics,
+        topics,
         cancel_token,
     };
 
     let inbound = tokio::spawn(inbound_task(inbound_rx, ctx.clone()));
     let outbound = tokio::spawn(outbound_task(msg_rx, outbound_rx, ctx.clone()));
     let listener = tokio::spawn(listener_task(bind, ctx.clone()));
-    let crdt = tokio::spawn(crdt_task(crdt_rx, ctx.clone()));
-    // let swim = tokio::spawn(swim_task(swim_rx, ctx.clone()));
 
     Background {
         ctx,
         stopped: false,
-        handles: vec![inbound, outbound, listener, crdt],
+        handles: vec![inbound, outbound, listener],
     }
 }
 
@@ -72,8 +67,6 @@ impl Context {
     pub fn close_all(&self) {
         self.cancel_token.cancel();
         self.msg.close();
-        self.crdt_inbound.close();
-        // self.swim_inbound.close();
         self.conn_inbound.close();
         self.conn_outbound.close();
     }
@@ -87,14 +80,15 @@ impl Context {
         F: CRDTUpdater,
         F::Error: Send + Sync + 'static,
     {
-        let Some(mut t) = self
-            .topics
-            .get_mut(&topic) else {
-                return Ok(false)
-            };
+        let Some(t) = self.topics.get(&topic) else { return Ok(false) };
 
-        let op = func.update(&mut t.deref_mut().logs, Actor::current())?;
-        self.crdt_inbound.send((topic, CRDTMessage::Op(op))).await?;
+        let op = func.update(&t.value().logs, Actor::current())?;
+
+        t.value()
+            .swim
+            .send_internal(InternalMessage::Broadcast(Broadcast::CrdtOp(op)))
+            .await?;
+
         Ok(true)
     }
 }

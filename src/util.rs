@@ -54,21 +54,22 @@ macro_rules! impl_cloneable {
 
 pub trait CRDTUpdater {
     type Error: std::error::Error;
-    fn update(self, topic: &mut LogList, actor: Actor) -> std::result::Result<LogOp, Self::Error>;
+    fn update(self, topic: &LogList, actor: Actor) -> std::result::Result<LogOp, Self::Error>;
 }
 
-impl<E: std::error::Error, F: FnOnce(&mut LogList) -> std::result::Result<LogOp, E>> CRDTUpdater
+impl<E: std::error::Error, F: FnOnce(&LogList, Actor) -> std::result::Result<LogOp, E>> CRDTUpdater
     for F
 {
     type Error = E;
 
-    fn update(self, op: &mut LogList, actor: Actor) -> std::result::Result<LogOp, Self::Error> {
-        self(op)
+    fn update(self, op: &LogList, actor: Actor) -> std::result::Result<LogOp, Self::Error> {
+        self(op, actor)
     }
 }
 
 pub trait CRDTReader {
     type Return;
+
     fn read(self, topic: &LogList) -> Self::Return;
 }
 
@@ -105,20 +106,20 @@ mod impls {
 }
 
 macro_rules! ok_or_break {
-    ($e:expr) => {{
+    ($target:literal, $e:expr) => {{
         match $e {
             Ok(x) => x,
             Err(e) => {
-                tracing::error!("{e}");
+                tracing::error!(target: $target, "{e}");
                 break;
             }
         }
     }};
-    ($e:expr, $($arg:tt)*) => {{
+    ($target:literal, $e:expr, $($arg:tt)*) => {{
         match $e {
             Ok(x) => x,
             Err(e) => {
-                tracing::error!(error = %e, $($arg:)*);
+                tracing::error!(target: $target, error = %e, $($arg)*);
                 break;
             }
         }
@@ -138,6 +139,7 @@ macro_rules! ok_or_return {
 }
 
 // TODO: implement retry machenism
+/// Macro to handle error with continue
 macro_rules! ok_or_continue {
     ($target:literal, $e:expr) => {{
         match $e {
@@ -148,10 +150,33 @@ macro_rules! ok_or_continue {
             }
         }
     }};
+    ($target:literal, $e:expr, $($arg:tt)*) => {{
+        match $e {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(target: $target, error = %e, $($arg)*, "Error, continue");
+                continue;
+            }
+        }
+    }};
+}
+
+macro_rules! ok_or_warn {
+    ($target:literal, $e:expr) => {{
+        if let Err(e) = $e {
+            tracing::warn!(target: $target, error = %e);
+        }
+    }};
+    ($target:literal, $e:expr, $($arg:tt)*) => {{
+        if let Err(e) = $e {
+            tracing::warn!(target: $target, error = %e, $($arg)*);
+        }
+    }};
 }
 
 pub(crate) use ok_or_break;
 pub(crate) use ok_or_continue;
 pub(crate) use ok_or_return;
+pub(crate) use ok_or_warn;
 
 use crate::model::{Actor, LogList, LogOp};

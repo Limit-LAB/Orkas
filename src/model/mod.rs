@@ -1,6 +1,6 @@
 //! Models include data wrapper and type aliases used in the project.
 
-use crdts::List;
+use crdts::SList;
 
 use crate::tasks::SwimJobHandle;
 
@@ -40,7 +40,7 @@ impl Actor {
 
     /// Unique actor identifier for the current node
     pub fn current() -> Self {
-        static CURRENT: LazyLock<Actor> = LazyLock::new(Actor::current);
+        static CURRENT: LazyLock<Actor> = LazyLock::new(Actor::random);
         *CURRENT
     }
 }
@@ -159,4 +159,4 @@ pub struct Topic {
     pub(crate) swim: SwimJobHandle,
 }
 
-pub type LogList = List<Log, Actor>;
+pub type LogList = SList<Log, Actor>;

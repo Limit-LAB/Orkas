@@ -18,15 +18,14 @@ use futures::{
     SinkExt, StreamExt,
 };
 use kanal::AsyncReceiver;
-use tokio::{net::TcpStream, select};
+use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 use crate::{
     codec::adapt,
-    model::{MessageType, SendTo},
+    model::Envelope,
     tasks::{Context, Inbound, Outbound},
     util::ok_or_continue,
-    Message,
 };
 
 pub const DEFAULT_CHANNEL_SIZE: usize = 1 << 4;
@@ -41,71 +40,20 @@ pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: Context) -> 
 
         match select(pin!(recv.recv()), pin!(streams.next())).await {
             Either::Left((stream, _)) => streams.push(stream?),
-            Either::Right((msgs, _)) => match msgs {
-                Some(Ok(set)) => {
-                    for msg in set.message {
-                        let Message {
-                            sender,
-                            id,
+            Either::Right((msg, _)) => match msg {
+                Some(Ok(msg)) => {
+                    let Envelope { topic, body, .. } = msg;
+
+                    if let Some(handle) = ctx.topics.get(&topic) {
+                        ok_or_continue!("inbound", handle.value().swim.send_external(body).await);
+                    } else {
+                        info!(
+                            target: "inbound",
+                            message_type = "swim",
                             topic,
-                            body,
-                        } = msg;
-                        match body {
-                            MessageType::CRDT(crdt) => {
-                                ok_or_continue!(
-                                    "inbound",
-                                    ctx.crdt_inbound.send((topic, crdt)).await
-                                )
-                            }
-                            MessageType::SWIM(swim) => {
-                                if let Some(handle) = ctx.topics.get(&topic) {
-                                    ok_or_continue!(
-                                        "inbound",
-                                        handle.swim.sender.send(swim.data).await
-                                    );
-                                } else {
-                                    info!(
-                                        target: "inbound",
-                                        message_type = "swim",
-                                        sender = %msg.sender,
-                                        topic,
-                                        "Non-exist topic, ignore",
-                                    );
-                                };
-                            }
-                            MessageType::Join { id, swim_data } => {
-                                if let Some(handle) = ctx.topics.get(&topic) {
-                                    todo!("handle join request")
-                                } else {
-                                    info!(
-                                        target: "inbound",
-                                        message_type = "join",
-                                        sender = %msg.sender,
-                                        topic,
-                                        "Non-exist topic, ignore",
-                                    );
-                                };
-                            }
-                            MessageType::JoinResponse {
-                                respond_to,
-                                swim_data,
-                                snapshot,
-                            } => {
-                                if let Some(mut handle) = ctx.topics.get_mut(&topic) {
-                                    handle.logs = snapshot;
-                                    handle.swim.sender.send(swim_data).await?;
-                                } else {
-                                    info!(
-                                        target: "inbound",
-                                        message_type = "join_response",
-                                        sender = %msg.sender,
-                                        topic,
-                                        "Non-exist topic, ignore",
-                                    );
-                                };
-                            }
-                        }
-                    }
+                            "Non-exist topic, ignore",
+                        );
+                    };
                 }
                 Some(Err(e)) => {
                     warn!("Error while reading inbound stream: {}", e);
@@ -122,7 +70,7 @@ pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: Context) -> 
 
 /// Aggregate all outbound data and dispatch them to corresponding targets.
 pub(super) async fn outbound_task(
-    msg_recv: AsyncReceiver<SendTo>,
+    msg_recv: AsyncReceiver<Envelope>,
     conn_recv: AsyncReceiver<(SocketAddr, Outbound)>,
     ctx: Context,
 ) -> Result<()> {
@@ -133,18 +81,21 @@ pub(super) async fn outbound_task(
         if ctx.cancel_token.is_cancelled() {
             break;
         }
-        select! {
-            msg = msg_recv.recv() => {
+        let (l, r) = (pin!(msg_recv.recv()), pin!(conn_recv.recv()));
+        match select(l, r).await {
+            Either::Left((msg, _)) => {
                 let msg = msg?;
+                let addr = msg.addr;
+
                 // TODO: better retry
                 let mut retry = 3;
                 loop {
                     if retry == 0 {
-                        warn!(target: "outbound", address = %msg.addr, "Failed to send message");
+                        warn!(target: "outbound", address = %addr, "Failed to send message");
                         break;
                     }
-                    if let hash_map::Entry::Vacant(entry) = map.entry(msg.addr) {
-                        let conn = TcpStream::connect(msg.addr)
+                    if let hash_map::Entry::Vacant(entry) = map.entry(addr) {
+                        let conn = TcpStream::connect(addr)
                             .await
                             .map(|s| adapt(s.into_split()));
                         let (stream, sink) = ok_or_continue!("outbound", conn);
@@ -153,18 +104,18 @@ pub(super) async fn outbound_task(
                         // Continue even if inbound has stopped
                         drop(ctx.conn_inbound.send(stream).await);
                     };
-                    let conn = map.get_mut(&msg.addr).unwrap();
-                    match conn.send(msg.msg.clone()).await {
+                    let conn = map.get_mut(&addr).unwrap();
+                    match conn.send(msg.clone()).await {
                         Ok(_) => break,
                         Err(e) => {
                             debug!(target: "outbound", error = %e, "Connection disconnected, retry");
-                            map.remove(&msg.addr);
+                            map.remove(&addr);
                         }
                     }
                     retry -= 1;
                 }
-            },
-            conn = conn_recv.recv() => {
+            }
+            Either::Right((conn, _)) => {
                 let (addr, conn) = ok_or_continue!("outbound", conn);
                 map.insert(addr, conn);
             }
