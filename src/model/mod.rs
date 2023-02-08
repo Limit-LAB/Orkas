@@ -4,7 +4,7 @@ use crdts::SList;
 
 use crate::tasks::SwimJobHandle;
 
-mod_use::mod_use![config, message];
+mod_use::mod_use![config, message, event,];
 
 use std::{
     fmt::Display,
@@ -36,12 +36,6 @@ impl Actor {
 
     pub fn random() -> Self {
         Self(rand::random())
-    }
-
-    /// Unique actor identifier for the current node
-    pub fn current() -> Self {
-        static CURRENT: LazyLock<Actor> = LazyLock::new(Actor::random);
-        *CURRENT
     }
 }
 
@@ -130,10 +124,27 @@ impl From<SocketAddr> for Id {
 }
 
 // TODO: placeholder for LimitLog
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Log {
     message: String,
     ts: Timestamp,
+}
+
+impl Log {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            ts: Timestamp::now(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn ts(&self) -> Timestamp {
+        self.ts
+    }
 }
 
 /// States of the Orkas node
@@ -154,6 +165,7 @@ pub struct ChannelState {}
 /// Represent a single topic which is then being stored in the global topics
 /// map, and can be updated separately and synced throughout a single topic
 /// cluster.
+#[derive(Debug, Clone)]
 pub struct Topic {
     pub(crate) logs: LogList,
     pub(crate) swim: SwimJobHandle,

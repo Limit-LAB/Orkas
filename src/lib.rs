@@ -2,19 +2,20 @@
 #![cfg_attr(test, feature(is_sorted))]
 #![feature(type_alias_impl_trait)]
 #![feature(once_cell)]
+#![feature(try_blocks)]
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use bincode::DefaultOptions;
-use color_eyre::Result;
-use foca::{BincodeCodec, Foca};
+use color_eyre::{eyre::bail, Result};
+use foca::BincodeCodec;
 use rand::{rngs::StdRng, thread_rng, SeedableRng};
 use tap::Pipe;
+use uuid7::uuid7;
 
 pub use crate::model::*;
 use crate::{
-    model::{Id, LogList, OrkasConfig, Topic},
-    tasks::{spawn_background, spawn_swim, Background, Context, SWIM},
+    tasks::{spawn_background, spawn_swim, Background, Context, OrkasBroadcastHandler, SWIM},
     util::{CRDTReader, CRDTUpdater},
 };
 
@@ -26,16 +27,14 @@ mod util;
 pub use codec::{adapt, adapt_with_option, SerdeBincodeCodec};
 
 pub struct Orkas {
-    pub config: OrkasConfig,
     pub background: Background,
 }
 
 impl Orkas {
     // TODO: more ergonomic `start_with_*` options
-    pub async fn start(config: OrkasConfig) -> Self {
+    pub fn start(config: OrkasConfig) -> Self {
         Self {
-            background: spawn_background(config.bind),
-            config,
+            background: spawn_background(config.into()),
         }
     }
 
@@ -56,40 +55,98 @@ impl Orkas {
     }
 
     // TODO: use `ToSocketAddrs` instead of `SocketAddr`.
+    // TODO: join with multiple initial nodes
     /// Join a topic cluster with given address and topic name.
     ///
     /// This will start handshake with correspoding SWIM node. Note that initial
     /// state syncing is not garanteed to be completed within this function.
-    pub async fn join(&self, topic: String, addr: SocketAddr) -> Result<()> {
+    pub async fn join_one(&self, topic: impl Into<String>, addr: SocketAddr) -> Result<()> {
+        let topic = topic.into();
         let ctx = self.ctx();
-        let (send, recv) = tokio::net::TcpStream::connect(addr)
+
+        let (send, recv) = tokio::net::TcpStream::connect(addr) // TODO: fine tuning connection or just use quinn
             .await?
             .into_split()
             .pipe(adapt);
 
-        let mut swim: SWIM = Foca::new(
-            Id::from(self.config.bind),
-            self.config.foca.clone(),
-            StdRng::from_rng(thread_rng())?,
-            BincodeCodec(DefaultOptions::new()),
-        );
-
-        {
-            let mut rt = ctx.swim_runtime(&topic);
-
-            swim.announce(addr.into(), &mut rt)?;
-
-            rt.flush().await?;
-        }
-
+        // Send the streams to the background task
         ctx.conn_inbound.send(send).await?;
         ctx.conn_outbound.send((addr, recv)).await?;
 
-        let swim = spawn_swim(topic.clone(), swim, ctx.clone()).await?;
+        let mut swim = SWIM::with_custom_broadcast(
+            Id::from(ctx.config.bind),
+            ctx.config.foca.clone(),
+            StdRng::from_rng(thread_rng())?,
+            BincodeCodec(DefaultOptions::new()),
+            OrkasBroadcastHandler::new(&topic, ctx.clone()),
+        );
+
+        let mut rt = ctx.swim_runtime(&topic);
+
+        // Start announcing
+        swim.announce(addr.into(), &mut rt)?;
+
+        // Spawn the SWIM task
+        let swim = spawn_swim(topic.clone(), swim, ctx.clone());
         let logs = LogList::new();
         let topic_record = Topic { swim, logs };
 
-        ctx.topics.insert(topic, topic_record);
+        // Insert the topic record
+        ctx.topics.insert(topic.clone(), topic_record);
+
+        // Send all messages from swim to outbound
+        rt.flush().await?;
+        drop(rt);
+
+        if !ctx.wait_for(addr, Duration::from_secs(5)).await {
+            bail!("Timeout waiting for initial join")
+        }
+
+        // Now swim is online, we can send the snapshot request
+        ctx.msg
+            .send(Envelope {
+                addr,
+                topic,
+                body: Message::RequestSnapshot,
+                id: uuid7(),
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    /// Create a new topic in current node
+    pub async fn new_topic(&self, topic: impl Into<String>) -> Result<()> {
+        let topic = topic.into();
+        let ctx = self.ctx();
+
+        let swim = SWIM::with_custom_broadcast(
+            Id::from(ctx.config.bind),
+            ctx.config.foca.clone(),
+            StdRng::from_rng(thread_rng())?,
+            BincodeCodec(DefaultOptions::new()),
+            OrkasBroadcastHandler::new(&topic, ctx.clone()),
+        );
+
+        // Spawn the task and create local record
+        let swim = spawn_swim(topic.clone(), swim, ctx.clone());
+        let logs = LogList::new();
+        let topic_record = Topic { swim, logs };
+
+        // Insert the topic record
+        ctx.topics.insert(topic.clone(), topic_record);
+
+        Ok(())
+    }
+
+    /// Leave a topic cluster
+    pub fn quit_topic(&self, topic: impl Into<String>) -> Result<()> {
+        let topic = topic.into();
+        let ctx = self.ctx();
+
+        let Some(topic_record) = ctx.topics.remove(&topic) else { return Ok(()) };
+
+        topic_record.value().swim.stop();
 
         Ok(())
     }

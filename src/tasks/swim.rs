@@ -1,34 +1,42 @@
 //! Background task of SWIM
 
-use std::pin::pin;
+use std::{borrow::Cow, io::Cursor, ops::Deref, pin::pin, sync::Arc};
 
 use bincode::DefaultOptions;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use color_eyre::Result;
-use foca::{BincodeCodec, Foca, NoCustomBroadcast, Runtime};
+use crdts::SyncedCmRDT;
+use foca::{BincodeCodec, BroadcastHandler, Foca, Invalidates, Notification, Runtime};
 use futures::future::{select, Either};
 use kanal::AsyncSender;
 use rand::rngs::StdRng;
+use serde::de::DeserializeOwned;
+use tap::Pipe;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tracing::{info, trace};
+use uuid7::uuid7;
 
 use crate::{
     model::Id,
     tasks::{Context, DEFAULT_CHANNEL_SIZE},
-    util::{ok_or_break, ok_or_continue, ok_or_warn},
-    Envelope, InternalMessage,
+    util::{ok_or_break, ok_or_warn},
+    BroadcastPacked, BroadcastType, Envelope, InternalMessage, Message,
 };
 
 #[allow(clippy::upper_case_acronyms)]
-pub type SWIM = Foca<Id, BincodeCodec<DefaultOptions>, StdRng, NoCustomBroadcast>;
+pub type SWIM = Foca<Id, BincodeCodec<DefaultOptions>, StdRng, OrkasBroadcastHandler>;
 
 /// Shim runtime that implements [`foca::Runtime`] trait.
 #[must_use]
 pub(crate) struct SwimRuntime<'a> {
-    topic: &'a str,
+    topic: Cow<'a, str>, // Workaround for initialize with borrowed str in `src/lib.rs`
     ctx: &'a Context,
     msg_buf: Vec<Envelope>,
 }
 
 impl SwimRuntime<'_> {
+    /// Flush buffered messages to outbound channel
     pub(crate) async fn flush(&mut self) -> Result<()> {
         for msg in std::mem::take(&mut self.msg_buf) {
             self.ctx.msg.send(msg).await?;
@@ -54,96 +62,232 @@ impl Drop for SwimRuntime<'_> {
 }
 
 impl<'a> Runtime<Id> for SwimRuntime<'a> {
+    // TODO: handle notification
     fn notify(&mut self, _notification: foca::Notification<Id>) {
-        todo!("handle notification")
+        match _notification {
+            Notification::MemberUp(id) | Notification::Rejoin(id) => {
+                if let Some(waiter) = self.ctx.waiters.remove(&id.addr()) {
+                    waiter.value().notify()
+                }
+            }
+            Notification::MemberDown(_) => {}
+            Notification::Active => {}
+            Notification::Idle => {}
+            Notification::Defunct => {}
+        }
     }
 
     fn send_to(&mut self, to: Id, data: &[u8]) {
         self.msg_buf.push(Envelope {
             addr: to.addr(),
-            topic: self.topic.to_owned(),
-            body: data.to_vec().into(),
+            topic: self.topic.as_ref().to_owned(),
+            body: Message::Swim(data.to_vec().into()),
+            id: uuid7(),
         })
     }
 
     fn submit_after(&mut self, event: foca::Timer<Id>, after: std::time::Duration) {
-        let Some(topic) = self.ctx.topics.get(self.topic) else { return };
+        let Some(topic) = self.ctx.topics.get(self.topic.as_ref()) else { return };
         let sender = topic.value().swim.internal_tx.clone();
 
         tokio::spawn(async move {
             tokio::time::sleep(after).await;
             // Ignore if current target no longer running after sleep
-            drop(sender.send(InternalMessage::Timer(event)).await);
+            ok_or_warn!(
+                "swim.submit_after",
+                sender.send(InternalMessage::Timer(event)).await
+            )
         });
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct SwimJobHandle {
+    cancel_token: CancellationToken,
     internal_tx: AsyncSender<InternalMessage>,
     external_tx: AsyncSender<Bytes>,
+    handle: Arc<JoinHandle<Result<()>>>,
 }
 
 impl SwimJobHandle {
+    /// Send internal messages to SWIM, which may be timer events or new
+    /// broadcast
     pub async fn send_internal(&self, msg: InternalMessage) -> Result<()> {
         self.internal_tx.send(msg).await?;
         Ok(())
     }
 
+    /// Send external messages (just bytes as foca will decode it later) to SWIM
     pub async fn send_external(&self, msg: Bytes) -> Result<()> {
         self.external_tx.send(msg).await?;
         Ok(())
     }
+
+    pub async fn broadcast(&self, msg: BroadcastType) -> Result<()> {
+        // self.send_internal(InternalMessage::Broadcast(msg)).await
+        Ok(())
+    }
+
+    pub fn running(&self) -> bool {
+        !self.handle.is_finished()
+    }
+
+    /// Stop the task. Note that this will not stop the task immediately.
+    /// Instead, a cancel request is issued and the task will be stopped when it
+    /// is safe to do so, i.e., when all pending tasks are finished.
+    pub fn stop(&self) {
+        // self.external_tx.close();
+        // self.internal_tx.close();
+        self.cancel_token.cancel();
+    }
 }
 
 impl Context {
-    pub(crate) fn swim_runtime<'a>(&'a self, topic: &'a str) -> SwimRuntime<'a> {
+    pub(crate) fn swim_runtime<'a>(&'a self, topic: impl Into<Cow<'a, str>>) -> SwimRuntime<'a> {
         SwimRuntime {
-            topic,
+            topic: topic.into(),
             ctx: self,
             msg_buf: Vec::new(),
         }
     }
 }
 
-pub(crate) async fn spawn_swim(
-    topic: String,
-    mut swim: SWIM,
+impl Invalidates for BroadcastPacked {
+    fn invalidates(&self, other: &Self) -> bool {
+        let b: Option<bool> = try { self.dot? >= other.dot? };
+        b.unwrap_or(false)
+    }
+}
+
+pub struct OrkasBroadcastHandler {
     ctx: Context,
-) -> Result<SwimJobHandle> {
-    let (internal_tx, internal_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-    let (external_tx, external_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-    // let (sender, receiver) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
+    topic: String,
+}
 
-    let handle = SwimJobHandle {
-        internal_tx,
-        external_tx,
-    };
+impl OrkasBroadcastHandler {
+    pub fn new(topic: impl Into<String>, ctx: Context) -> Self {
+        Self {
+            topic: topic.into(),
+            ctx,
+        }
+    }
+}
 
-    tokio::spawn(async move {
+fn try_decode<T: DeserializeOwned>(data: impl Buf) -> Result<Option<T>, bincode::Error> {
+    if data.chunk().is_empty() {
+        return Ok(None);
+    }
+    let mut cur = Cursor::new(data.chunk());
+
+    let res = bincode::deserialize_from::<_, T>(&mut cur);
+    trace!("Read {}", cur.position());
+    data.advance(cur.position() as usize);
+
+    match res {
+        Ok(T) => Ok(Some(T)),
+        // Buffer is not filled (yet), not an error. Leave the cursor untouched so that
+        // remaining bytes can be used in the next decode attempt.
+        Err(e) => match *e {
+            // Buffer is not filled (yet), not an error. Leave the cursor untouched so that
+            // remaining bytes can be used in the next decode attempt.
+            bincode::ErrorKind::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Ok(None);
+            }
+            _ => return Err(e.into()),
+        },
+    }
+}
+
+impl BroadcastHandler<Id> for OrkasBroadcastHandler {
+    type Broadcast = BroadcastPacked;
+    type Error = bincode::Error;
+
+    fn receive_item(
+        &mut self,
+        mut data: impl bytes::Buf,
+    ) -> std::result::Result<Option<Self::Broadcast>, Self::Error> {
+        let bind = &self.ctx.config.bind;
+        let _s = tracing::info_span!("swim.broadcast_handler", addr = %bind).entered();
+
+        if data.chunk().is_empty() {
+            return Ok(None);
+        }
+
+        let mut cur = Cursor::new(data.chunk());
+        let res: BroadcastPacked = bincode::deserialize_from(&mut cur)?;
+        trace!("Read {}", cur.position());
+        data.advance(cur.position() as usize);
+
+        trace!("Broadcast pack received");
+
+        let topic = &self.topic;
+        let inner = res.deserialize()?;
+
+        trace!("Broadcast received");
+
+        match inner.data {
+            BroadcastType::CrdtOp(op) => {
+                if let Some(topic) = self.ctx.topics.get(topic) {
+                    info!(?op, "Apply crdt op");
+                    topic.value().logs.synced_apply(op);
+                    info!(list = ?topic.value().logs.len());
+                    Ok(Some(res))
+                } else {
+                    info!(topic, "Non-exist topic, ignore",);
+                    Ok(None)
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn spawn_swim(topic: String, mut swim: SWIM, ctx: Context) -> SwimJobHandle {
+    let (internal_tx, internal_rx) = kanal::bounded_async::<InternalMessage>(DEFAULT_CHANNEL_SIZE);
+    let (external_tx, external_rx) = kanal::bounded_async::<Bytes>(DEFAULT_CHANNEL_SIZE);
+    let cancel_token = ctx.cancel_token.child_token();
+    let token = cancel_token.clone();
+
+    let handle = tokio::spawn(async move {
         let mut rt = ctx.swim_runtime(&topic);
+
         loop {
+            if token.is_cancelled() {
+                // TODO: graceful shutdown by reading all remaining messages and close the
+                // channel.
+                break;
+            }
+
             let (l, r) = (pin!(internal_rx.recv()), pin!(external_rx.recv()));
 
-            let res = match select(l, r).await {
+            match select(l, r).await {
                 Either::Left((internal, _)) => {
                     let msg = ok_or_break!("swim", internal, topic);
                     match msg {
-                        InternalMessage::Timer(event) => swim.handle_timer(event, &mut rt),
+                        InternalMessage::Timer(event) => {
+                            ok_or_warn!("swim.timer", swim.handle_timer(event, &mut rt));
+                        }
                         InternalMessage::Broadcast(b) => {
-                            todo!()
+                            ok_or_warn!("swim.add_broadcast", swim.add_broadcast(&b))
                         }
                     }
                 }
                 Either::Right((external, _)) => {
                     let msg = ok_or_break!("swim", external, topic);
-                    swim.handle_data(&msg, &mut rt)
+                    ok_or_warn!("swim.handle_data", swim.handle_data(msg.deref(), &mut rt))
                 }
             };
-            ok_or_warn!("swim", res);
-            ok_or_continue!("swim", rt.flush().await);
-        }
-    });
 
-    Ok(handle)
+            ok_or_break!("swim.flush", rt.flush().await);
+        }
+
+        Ok(())
+    })
+    .pipe(Arc::new);
+
+    SwimJobHandle {
+        cancel_token,
+        internal_tx,
+        external_tx,
+        handle,
+    }
 }

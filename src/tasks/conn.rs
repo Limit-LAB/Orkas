@@ -19,13 +19,15 @@ use futures::{
 };
 use kanal::AsyncReceiver;
 use tokio::net::TcpStream;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
+use uuid7::uuid7;
 
 use crate::{
     codec::adapt,
-    model::Envelope,
+    model::{Envelope, Topic},
     tasks::{Context, Inbound, Outbound},
     util::ok_or_continue,
+    Message,
 };
 
 pub const DEFAULT_CHANNEL_SIZE: usize = 1 << 4;
@@ -43,17 +45,52 @@ pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: Context) -> 
             Either::Right((msg, _)) => match msg {
                 Some(Ok(msg)) => {
                     let Envelope { topic, body, .. } = msg;
-
-                    if let Some(handle) = ctx.topics.get(&topic) {
-                        ok_or_continue!("inbound", handle.value().swim.send_external(body).await);
-                    } else {
+                    let Some(handle) = ctx.topics.get(&topic) else {
                         info!(
                             target: "inbound",
                             message_type = "swim",
                             topic,
                             "Non-exist topic, ignore",
                         );
+                        continue
                     };
+
+                    match body {
+                        Message::Swim(bytes) => {
+                            trace!(target: "inbound", message_type = "swim", ?bytes, "Received swim data");
+
+                            ok_or_continue!(
+                                "inbound",
+                                handle.value().swim.send_external(bytes).await
+                            );
+                        }
+                        Message::RequestSnapshot => {
+                            trace!(target: "inbound", message_type = "request_snapshot", "Received request snapshot");
+
+                            let topic = topic.clone();
+                            let snapshot = handle.value().logs.clone();
+                            let res = ctx
+                                .msg
+                                .send(Envelope {
+                                    addr: msg.addr,
+                                    topic,
+                                    body: Message::Snapshot { snapshot },
+                                    id: uuid7(),
+                                })
+                                .await;
+                            ok_or_continue!("inbound", res)
+                        }
+                        Message::Snapshot { snapshot } => {
+                            trace!(target: "inbound", message_type = "snapshot", "Received snapshot");
+
+                            let swim = handle.value().swim.clone();
+                            let new_topic = Topic {
+                                logs: snapshot,
+                                swim,
+                            };
+                            ctx.topics.insert(topic, new_topic);
+                        }
+                    }
                 }
                 Some(Err(e)) => {
                     warn!("Error while reading inbound stream: {}", e);
@@ -108,7 +145,7 @@ pub(super) async fn outbound_task(
                     match conn.send(msg.clone()).await {
                         Ok(_) => break,
                         Err(e) => {
-                            debug!(target: "outbound", error = %e, "Connection disconnected, retry");
+                            debug!(target: "outbound", error = %e, "Send failed, retry");
                             map.remove(&addr);
                         }
                     }
@@ -125,18 +162,18 @@ pub(super) async fn outbound_task(
 }
 
 /// Accept income connections and send them to the inbound and outbound task
-pub(super) async fn listener_task(bind: SocketAddr, ent: Context) -> Result<()> {
-    let listener = tokio::net::TcpListener::bind(bind).await?;
+pub(super) async fn listener_task(ctx: Context) -> Result<()> {
+    let listener = tokio::net::TcpListener::bind(ctx.config.bind).await?;
     loop {
-        if ent.cancel_token.is_cancelled() {
+        if ctx.cancel_token.is_cancelled() {
             break;
         }
         let (stream, src) = ok_or_continue!("listener", listener.accept().await);
         tracing::trace!(target: "listener", %src, "New connection");
         let (stream, sink) = adapt(stream.into_split());
         match (
-            ent.conn_inbound.send(stream).await,
-            ent.conn_outbound.send((src, sink)).await,
+            ctx.conn_inbound.send(stream).await,
+            ctx.conn_outbound.send((src, sink)).await,
         ) {
             (Ok(_), Ok(_)) => {}
             (Err(e), _) | (_, Err(e)) => tracing::error!("Error in listener: {}", e),

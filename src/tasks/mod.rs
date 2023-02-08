@@ -1,6 +1,6 @@
 mod_use::mod_use![conn, swim];
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
 use crossbeam_skiplist::SkipMap;
@@ -11,12 +11,13 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::{
     codec::{MessageSink, MessageStream},
     model::{Actor, Envelope, State, Topic},
-    util::CRDTUpdater,
-    Broadcast, InternalMessage,
+    util::{CRDTUpdater, Flag},
+    Broadcast, InternalMessage, OrkasConfig,
 };
 
 type Inbound = MessageStream<OwnedReadHalf>;
@@ -25,42 +26,19 @@ type Outbound = MessageSink<OwnedWriteHalf>;
 /// Context of Orkas.
 ///
 /// Contains all the channel sender. This type is relatively cheap to clone and
-/// all fields are behind reference count thus all instances targets to same
+/// all fields are behind reference count thus all instances targets to the same
 /// objects.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Context {
     pub msg: kanal::AsyncSender<Envelope>,
     pub conn_inbound: kanal::AsyncSender<Inbound>,
     pub conn_outbound: kanal::AsyncSender<(SocketAddr, Outbound)>,
     pub topics: Arc<SkipMap<String, Topic>>,
+    pub waiters: Arc<SkipMap<SocketAddr, Flag>>,
+    pub config: Arc<OrkasConfig>,
+    actor: Actor,
+
     cancel_token: CancellationToken,
-}
-
-pub fn spawn_background(bind: SocketAddr) -> Background {
-    let (conn_inbound, inbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-    let (conn_outbound, outbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-    let (msg, msg_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
-
-    let cancel_token = CancellationToken::new();
-    let topics = SkipMap::new().pipe(Arc::new);
-
-    let ctx = Context {
-        msg,
-        conn_inbound,
-        conn_outbound,
-        topics,
-        cancel_token,
-    };
-
-    let inbound = tokio::spawn(inbound_task(inbound_rx, ctx.clone()));
-    let outbound = tokio::spawn(outbound_task(msg_rx, outbound_rx, ctx.clone()));
-    let listener = tokio::spawn(listener_task(bind, ctx.clone()));
-
-    Background {
-        ctx,
-        stopped: false,
-        handles: vec![inbound, outbound, listener],
-    }
 }
 
 impl Context {
@@ -80,19 +58,66 @@ impl Context {
         F: CRDTUpdater,
         F::Error: Send + Sync + 'static,
     {
-        let Some(t) = self.topics.get(&topic) else { return Ok(false) };
-
-        let op = func.update(&t.value().logs, Actor::current())?;
+        let Some(t) = self.topics.get(&topic) else { bail!("Topic does not exist") };
+        let Some(op) = func.update(&t.value().logs, self.actor)? else { return Ok(false) };
 
         t.value()
             .swim
-            .send_internal(InternalMessage::Broadcast(Broadcast::CrdtOp(op)))
+            .send_internal(
+                Broadcast::new_crdt(op)
+                    .pack()?
+                    .serialize()?
+                    .pipe(InternalMessage::Broadcast),
+            )
             .await?;
 
         Ok(true)
     }
+
+    /// Wait for node with corresponding address to join or rejoin.
+    pub async fn wait_for(&self, addr: SocketAddr, dur: Duration) -> bool {
+        let f = self
+            .waiters
+            .get_or_insert_with(addr, || Flag::new())
+            .value()
+            .clone();
+
+        f.timeout(dur).await.is_ok()
+    }
 }
 
+pub fn spawn_background(config: Arc<OrkasConfig>) -> Background {
+    let (conn_inbound, inbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
+    let (conn_outbound, outbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
+    let (msg, msg_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
+
+    let cancel_token = CancellationToken::new();
+    let topics = SkipMap::new().pipe(Arc::new);
+    let waiters = SkipMap::new().pipe(Arc::new);
+
+    let ctx = Context {
+        actor: Actor::random(),
+        msg,
+        conn_inbound,
+        conn_outbound,
+        topics,
+        waiters,
+        config,
+        cancel_token,
+    };
+
+    let inbound = tokio::spawn(inbound_task(inbound_rx, ctx.clone()));
+    let outbound = tokio::spawn(outbound_task(msg_rx, outbound_rx, ctx.clone()));
+    let listener = tokio::spawn(listener_task(ctx.clone()));
+
+    Background {
+        ctx,
+        stopped: false,
+        handles: vec![inbound, outbound, listener],
+    }
+}
+
+// TODO: enum Status { Starting, Running, Stopped }
 pub struct Background {
     pub(crate) ctx: Context,
     handles: Vec<JoinHandle<Result<()>>>,
@@ -102,6 +127,7 @@ pub struct Background {
 impl Drop for Background {
     fn drop(&mut self) {
         if !self.stopped {
+            warn!("Background tasks are not properly stopped. Forcefully stopping.");
             self.force_stop();
         }
     }
@@ -110,7 +136,9 @@ impl Drop for Background {
 impl Background {
     /// Check if all background tasks are still running.
     pub fn is_running(&self) -> bool {
-        !(self.ctx.cancel_token.is_cancelled() || self.handles.iter().any(|x| x.is_finished()))
+        !(self.stopped
+            || self.ctx.cancel_token.is_cancelled()
+            || self.handles.iter().any(|x| x.is_finished()))
     }
 
     /// Issue a cancellation request to the background tasks.
@@ -127,6 +155,9 @@ impl Background {
     ///
     /// [`JoinHandle::abort`]: tokio::task::JoinHandle::abort
     pub fn force_stop(&mut self) {
+        if self.stopped {
+            return;
+        }
         self.stopped = true;
         self.ctx.close_all();
         self.handles.iter().for_each(|x| x.abort());
@@ -148,6 +179,6 @@ impl Background {
                 // Panicked or cancelled
                 Err(e) => bail!("Background task quit: {e}"),
             })
-            .collect()
+            .collect::<Vec<_>>()
     }
 }

@@ -1,42 +1,3 @@
-use color_eyre::Result;
-use futures::Future;
-use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
-use tracing::warn;
-
-pub fn cancellable_spawn<F, Arg, Fut>(
-    token: &CancellationToken,
-    captures: Arg,
-    func: F,
-) -> JoinHandle<()>
-where
-    F: FnOnce(CancellationToken, Arg::Owned) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<()>> + Send + Sync + 'static,
-    Arg: CloneableTuple,
-    Arg::Owned: Send + Sync + 'static,
-{
-    let token = token.clone();
-    let arg = captures.clone_me();
-    tokio::spawn(async move {
-        if let Err(e) = func(token.clone(), arg).await {
-            warn!("{e}");
-            token.cancel();
-        }
-    })
-}
-
-pub trait CloneableTuple {
-    type Owned;
-
-    fn clone_me(self) -> Self::Owned;
-}
-
-impl CloneableTuple for () {
-    type Owned = ();
-
-    fn clone_me(self) -> Self::Owned {}
-}
-
 macro_rules! impl_cloneable {
     ($($t:ident = $idx:tt),+) => {
         impl <$( $t ),+> CloneableTuple for ($( &$t, )+) where
@@ -52,41 +13,9 @@ macro_rules! impl_cloneable {
     };
 }
 
-pub trait CRDTUpdater {
-    type Error: std::error::Error;
-    fn update(self, topic: &LogList, actor: Actor) -> std::result::Result<LogOp, Self::Error>;
-}
-
-impl<E: std::error::Error, F: FnOnce(&LogList, Actor) -> std::result::Result<LogOp, E>> CRDTUpdater
-    for F
-{
-    type Error = E;
-
-    fn update(self, op: &LogList, actor: Actor) -> std::result::Result<LogOp, Self::Error> {
-        self(op, actor)
-    }
-}
-
-pub trait CRDTReader {
-    type Return;
-
-    fn read(self, topic: &LogList) -> Self::Return;
-}
-
-impl<T, F> CRDTReader for F
-where
-    F: FnOnce(&LogList) -> T,
-{
-    type Return = T;
-
-    fn read(self, op: &LogList) -> T {
-        self(op)
-    }
-}
-
 #[rustfmt::skip]
 mod impls {
-    use super::CloneableTuple;
+    use super::super::CloneableTuple;
 
     impl_cloneable!(T1 = 0);
     impl_cloneable!(T1 = 0, T2 = 1);
@@ -119,7 +48,7 @@ macro_rules! ok_or_break {
         match $e {
             Ok(x) => x,
             Err(e) => {
-                tracing::error!(target: $target, error = %e, $($arg)*);
+                tracing::error!(target: $target, error = ?e, $($arg)*);
                 break;
             }
         }
@@ -145,7 +74,7 @@ macro_rules! ok_or_continue {
         match $e {
             Ok(x) => x,
             Err(e) => {
-                tracing::warn!(target: $target, error = %e, "Error, continue");
+                tracing::warn!(target: $target, error = ?e, "Error, continue");
                 continue;
             }
         }
@@ -154,7 +83,7 @@ macro_rules! ok_or_continue {
         match $e {
             Ok(x) => x,
             Err(e) => {
-                tracing::warn!(target: $target, error = %e, $($arg)*, "Error, continue");
+                tracing::warn!(target: $target, error = ?e, $($arg)*, "Error, continue");
                 continue;
             }
         }
@@ -164,12 +93,12 @@ macro_rules! ok_or_continue {
 macro_rules! ok_or_warn {
     ($target:literal, $e:expr) => {{
         if let Err(e) = $e {
-            tracing::warn!(target: $target, error = %e);
+            tracing::warn!(target: $target, error = ?e);
         }
     }};
     ($target:literal, $e:expr, $($arg:tt)*) => {{
         if let Err(e) = $e {
-            tracing::warn!(target: $target, error = %e, $($arg)*);
+            tracing::warn!(target: $target, error = ?e, $($arg)*);
         }
     }};
 }
@@ -178,5 +107,3 @@ pub(crate) use ok_or_break;
 pub(crate) use ok_or_continue;
 pub(crate) use ok_or_return;
 pub(crate) use ok_or_warn;
-
-use crate::model::{Actor, LogList, LogOp};

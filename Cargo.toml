@@ -16,7 +16,7 @@ rcgen  = "0.10.0"
 rustls = "0.20.8"
 
 ## Membership
-foca = { version = "0.10.0", features = ["serde", "bincode-codec"] } # TODO: implment own swim with topic
+foca = { version = "0.10.0", features = ["serde", "bincode-codec", "tracing"] } # TODO: implment own swim with topic
 
 ## Runtime
 tokio   = { version = "1.25.0", features = ["net", "macros"] }
@@ -43,12 +43,13 @@ mod_use            = "0.2.1"
 tap                = "1.0.1"
 rand               = "0.8.5"
 crossbeam-skiplist = "0.1.1"
+thiserror          = "1.0.38"
 
 ## CRDT
 [dependencies.crdts]
 version  = "7.2.0"
 git      = "https://github.com/Limit-Lab/rust-crdt"
-rev      = "8059eba07909245d6a46727c6d462b83b1e03dfd"
+rev      = "08e12588c730ed9ee660fb074867a0cc43de9acf"
 features = ["sync"]
 
 [dev-dependencies]

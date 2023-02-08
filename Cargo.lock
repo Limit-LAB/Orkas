@@ -139,7 +139,7 @@ checksum = "5827cebf4670468b8772dd191856768aedcb1b0278a04f989f7766351917b9dc"
 [[package]]
 name = "crdts"
 version = "7.2.0"
-source = "git+https://github.com/Limit-Lab/rust-crdt?rev=8059eba07909245d6a46727c6d462b83b1e03dfd#8059eba07909245d6a46727c6d462b83b1e03dfd"
+source = "git+https://github.com/Limit-Lab/rust-crdt?rev=08e12588c730ed9ee660fb074867a0cc43de9acf#08e12588c730ed9ee660fb074867a0cc43de9acf"
 dependencies = [
  "crossbeam-skiplist",
  "num",
@@ -226,6 +226,7 @@ dependencies = [
  "bytes",
  "rand 0.8.5",
  "serde",
+ "tracing",
 ]
 
 [[package]]
@@ -597,6 +598,7 @@ dependencies = [
  "rustls",
  "serde",
  "tap",
+ "thiserror",
  "tokio",
  "tokio-util",
  "tracing",

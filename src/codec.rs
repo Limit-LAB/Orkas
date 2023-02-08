@@ -178,3 +178,32 @@ async fn test_codec() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_bincode_ser() {
+    use uuid7::Uuid;
+
+    #[derive(Debug, Serialize, PartialEq, Eq, Clone)]
+    struct Meta {
+        id: uuid7::Uuid,
+        topic: String,
+    }
+    #[derive(Debug, Serialize, PartialEq, Eq, Clone)]
+    struct Ser {
+        meta: Meta,
+        data: BytesMut,
+    }
+
+    let a = Ser {
+        meta: Meta {
+            id: Uuid::MAX,
+            topic: "111".to_owned(),
+        },
+        data: BytesMut::from([1, 1, 0, 1, 1, 0].as_slice()),
+    };
+
+    let b = bincode::serialize(&a).unwrap();
+
+    println!("Len {}", b.len());
+    println!("{:?}", b);
+}
