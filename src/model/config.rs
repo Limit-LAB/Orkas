@@ -35,7 +35,7 @@ impl OrkasConfig {
         Ok((server_config, cert_der))
     }
 
-    pub fn start(self) -> Orkas {
-        Orkas::start(self)
+    pub async fn start(self) -> Result<Orkas> {
+        Orkas::start(self).await
     }
 }

@@ -1,6 +1,6 @@
 use std::{convert::Infallible, net::SocketAddr, str::FromStr, time::Duration};
 
-use orkas::{Actor, Log, LogList, Orkas, OrkasConfig};
+use orkas::{Actor, Log, LogList, OrkasConfig};
 use tap::Pipe;
 use tokio::time::sleep;
 use tracing::info;
@@ -11,13 +11,8 @@ async fn test_run() {
 
     let addr_1 = SocketAddr::from_str("127.0.0.1:8000").unwrap();
     let addr_2 = SocketAddr::from_str("127.0.0.1:8001").unwrap();
-    let node_1 = OrkasConfig::simple(addr_1).start();
-    let node_2 = OrkasConfig::simple(addr_2).start();
-
-    // Wait for nodes to start listening
-    sleep(Duration::from_secs(1)).await;
-
-    info!("Creating topic on node 2");
+    let node_1 = OrkasConfig::simple(addr_1).start().await.unwrap();
+    let node_2 = OrkasConfig::simple(addr_2).start().await.unwrap();
 
     node_2.new_topic("test".to_owned()).await.unwrap();
 
@@ -41,4 +36,7 @@ async fn test_run() {
     let len2 = node_2.read("test", |e: &LogList| e.len());
 
     assert_eq!(len1, len2);
+
+    node_1.stop().await;
+    node_2.stop().await;
 }

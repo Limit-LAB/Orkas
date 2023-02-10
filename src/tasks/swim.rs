@@ -1,18 +1,17 @@
 //! Background task of SWIM
 
-use std::{borrow::Cow, fmt::Debug, ops::Deref, pin::pin, sync::Arc};
+use std::{borrow::Cow, fmt::Debug, ops::Deref, sync::Arc};
 
 use bytes::Bytes;
 use color_eyre::Result;
 use crdts::SyncedCmRDT;
 use foca::{BincodeCodec, BroadcastHandler, Foca, Invalidates, Notification, Runtime};
-use futures::future::{select, Either};
 use kanal::AsyncSender;
 use rand::rngs::StdRng;
-use tap::{Pipe, Tap, TapOptional};
-use tokio::task::JoinHandle;
+use tap::Pipe;
+use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, info_span, trace};
+use tracing::{debug, info_span, trace};
 use uuid7::uuid7;
 
 use crate::{
@@ -91,7 +90,7 @@ impl<'a> Runtime<Id> for SwimRuntime<'a> {
 
         tokio::spawn(async move {
             tokio::time::sleep(after).await;
-            // Ignore if current target no longer running after sleep
+
             ok_or_warn!(
                 "swim.submit_after",
                 sender.send(InternalMessage::Timer(event)).await
@@ -230,16 +229,11 @@ pub(crate) fn spawn_swim(topic: String, mut swim: SWIM, ctx: Context) -> SwimJob
         loop {
             debug!(id = ?swim.identity());
 
-            if token.is_cancelled() {
-                // TODO: graceful shutdown by reading all remaining messages and close the
-                // channel.
-                break;
-            }
-
-            let (l, r) = (pin!(internal_rx.recv()), pin!(external_rx.recv()));
-
-            match select(l, r).await {
-                Either::Left((internal, _)) => {
+            select! {
+                _ = token.cancelled() => {
+                    break;
+                }
+                internal = internal_rx.recv() => {
                     trace!(?internal, "swim.internal");
 
                     let _s = info_span!("swim.internal", id = ?swim.identity()).entered();
@@ -254,7 +248,7 @@ pub(crate) fn spawn_swim(topic: String, mut swim: SWIM, ctx: Context) -> SwimJob
                         }
                     }
                 }
-                Either::Right((external, _)) => {
+                external = external_rx.recv() => {
                     trace!(?external, "swim.external");
                     let _s = info_span!("swim.external", id = ?swim.identity()).entered();
 

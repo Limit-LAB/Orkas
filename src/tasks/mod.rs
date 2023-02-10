@@ -3,16 +3,19 @@ mod_use::mod_use![conn, swim];
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
-use crdts::{CmRDT, SyncedCmRDT};
+use crdts::SyncedCmRDT;
 use crossbeam_skiplist::{SkipMap, SkipSet};
 use futures::future::join_all;
 use tap::Pipe;
 use tokio::{
-    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpListener,
+    },
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid7::Uuid;
 
 use crate::{
@@ -47,6 +50,7 @@ pub struct Context {
 impl Context {
     pub fn close_all(&self) {
         self.cancel_token.cancel();
+        self.topics.iter().for_each(|t| t.value().swim.stop());
         self.msg.close();
         self.conn_inbound.close();
         self.conn_outbound.close();
@@ -96,7 +100,7 @@ impl Context {
     }
 }
 
-pub fn spawn_background(config: Arc<OrkasConfig>) -> Background {
+pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
     let (conn_inbound, inbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
     let (conn_outbound, outbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
     let (msg, msg_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
@@ -118,15 +122,20 @@ pub fn spawn_background(config: Arc<OrkasConfig>) -> Background {
         cancel_token,
     };
 
+    let listener = TcpListener::bind(ctx.config.bind)
+        .await?
+        .pipe(|l| listener_task(l, ctx.clone()))
+        .pipe(tokio::spawn);
+
     let inbound = tokio::spawn(inbound_task(inbound_rx, ctx.clone()));
     let outbound = tokio::spawn(outbound_task(msg_rx, outbound_rx, ctx.clone()));
-    let listener = tokio::spawn(listener_task(ctx.clone()));
 
     Background {
         ctx,
         stopped: false,
         handles: vec![inbound, outbound, listener],
     }
+    .pipe(Ok)
 }
 
 // TODO: enum Status { Starting, Running, Stopped }
@@ -179,6 +188,7 @@ impl Background {
     /// [`BackgroundHandle::cancel`] to gracefully shutdown the background
     /// tasks.
     pub async fn stop(mut self) -> Vec<Result<()>> {
+        info!("Stopping background tasks...");
         self.stopped = true;
         self.ctx.close_all();
         join_all(std::mem::take(&mut self.handles))

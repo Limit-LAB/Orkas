@@ -32,10 +32,11 @@ pub struct Orkas {
 
 impl Orkas {
     // TODO: more ergonomic `start_with_*` options
-    pub fn start(config: OrkasConfig) -> Self {
+    pub async fn start(config: OrkasConfig) -> Result<Self> {
         Self {
-            background: spawn_background(config.into()),
+            background: spawn_background(config.into()).await?,
         }
+        .pipe(Ok)
     }
 
     /// Initiate the background task. Some of the functions will not work if
