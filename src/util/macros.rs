@@ -55,18 +55,6 @@ macro_rules! ok_or_break {
     }};
 }
 
-macro_rules! ok_or_return {
-    ($e:expr) => {{
-        match $e {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::error!("{e}");
-                return;
-            }
-        }
-    }};
-}
-
 // TODO: implement retry machenism
 /// Macro to handle error with continue
 macro_rules! ok_or_continue {
@@ -105,5 +93,4 @@ macro_rules! ok_or_warn {
 
 pub(crate) use ok_or_break;
 pub(crate) use ok_or_continue;
-pub(crate) use ok_or_return;
 pub(crate) use ok_or_warn;
