@@ -124,11 +124,13 @@ pub(super) async fn outbound_task(
                 let msg = msg?;
                 let addr = msg.addr;
 
+                trace!(target: "outbound", %addr, ?msg, "Sending message");
+
                 // TODO: better retry
                 let mut retry = 3;
                 loop {
                     if retry == 0 {
-                        warn!(target: "outbound", address = %addr, "Failed to send message");
+                        warn!(target: "outbound", %addr, "Failed to send message");
                         break;
                     }
                     if let hash_map::Entry::Vacant(entry) = map.entry(addr) {

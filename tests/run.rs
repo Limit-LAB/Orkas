@@ -7,17 +7,14 @@ use tracing::info;
 
 #[tokio::test]
 async fn test_run() {
-    std::env::set_var(
-        "RUST_LOG",
-        "INFO,message=TRACE,swim.broadcast_handler=TRACE",
-    );
     tracing_subscriber::fmt::init();
 
     let addr_1 = SocketAddr::from_str("127.0.0.1:8000").unwrap();
     let addr_2 = SocketAddr::from_str("127.0.0.1:8001").unwrap();
-    let node_1 = Orkas::start(OrkasConfig::simple(addr_1));
-    let node_2 = Orkas::start(OrkasConfig::simple(addr_2));
+    let node_1 = OrkasConfig::simple(addr_1).start();
+    let node_2 = OrkasConfig::simple(addr_2).start();
 
+    // Wait for nodes to start listening
     sleep(Duration::from_secs(1)).await;
 
     info!("Creating topic on node 2");

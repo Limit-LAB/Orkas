@@ -186,32 +186,33 @@ impl BroadcastHandler<Id> for OrkasBroadcastHandler {
     ) -> std::result::Result<Option<Self::Broadcast>, Self::Error> {
         let _s = tracing::info_span!("swim.broadcast_handler").entered();
 
-        trace!(target: "swim.broadcast_handler", "{:?}", data.chunk());
+        trace!("{:?}", data.chunk());
 
         let topic = &self.topic;
 
-        if let Ok(Some(broadcast)) = try_decode::<Broadcast>(&mut data, bincode_option()) {
+        if let Ok(Some(pack)) = try_decode::<BroadcastPacked>(&mut data, bincode_option()) {
+            debug!("Broadcast pack received");
+            if self.ctx.seen(&pack.id) {
+                return Ok(None);
+            }
+            debug!(?pack, "Fresh broadcast pack");
+            self.ctx.saw(pack.id);
+            Some(pack)
+        } else if let Some(broadcast) = try_decode::<Broadcast>(&mut data, bincode_option())? {
             debug!(broadcast = ?broadcast, "Broadcast received");
             match broadcast.data {
                 BroadcastType::CrdtOp(op) => {
                     if let Some(topic) = self.ctx.topics.get(topic) {
-                        info!(?op, "Applying crdt op");
+                        debug!(?op, "Applying crdt op");
                         topic.value().logs.synced_apply(op);
-                        info!(list_len = ?topic.value().logs.len());
                     } else {
-                        info!(topic, "Non-exist topic, ignore");
+                        debug!(topic, "Non-exist topic, ignore");
                     }
                 }
             }
             None
         } else {
-            try_decode::<BroadcastPacked>(&mut data, bincode_option())?
-                .tap(|_| debug!(target: "swim.broadcast_handler", "Broadcast pack received"))
-                .filter(|pack| !self.ctx.seen(&pack.id))
-                .tap_some(|pack| {
-                    debug!(target: "swim.broadcast_handler", ?pack, "Fresh broadcast pack");
-                    self.ctx.saw(pack.id)
-                })
+            None
         }
         .pipe(Ok)
     }

@@ -173,10 +173,7 @@ pub fn try_decode<T: DeserializeOwned + Debug>(
             bincode::ErrorKind::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 return Ok(None);
             }
-            _ => {
-                warn!(error=?e, "Failed to deserialize message.");
-                Err(e.into())
-            }
+            _ => Err(e.into()),
         },
     }
 }
