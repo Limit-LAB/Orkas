@@ -1,11 +1,14 @@
 use std::net::SocketAddr;
 
+use bincode::Options;
 use bytes::Bytes;
 use crdts::Dot;
-use tap::Pipe;
+use tap::{Pipe, Tap};
+use tracing::trace;
 use uuid7::{uuid7, Uuid};
 
 use crate::{
+    codec::bincode_option,
     model::{Id, LogList, LogOp},
     Actor,
 };
@@ -36,6 +39,7 @@ pub enum Message {
 
 /// Messages being passed around internally, not produced internally. External
 /// messages are also included
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InternalMessage {
     /// Timer event of foca
     Timer(foca::Timer<Id>),
@@ -46,14 +50,12 @@ pub enum InternalMessage {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Broadcast {
-    pub id: Uuid,
     pub data: BroadcastType,
 }
 
 impl Broadcast {
     pub fn new_crdt(op: LogOp) -> Self {
         Self {
-            id: uuid7(),
             data: BroadcastType::CrdtOp(op),
         }
     }
@@ -69,7 +71,6 @@ impl Broadcast {
 
 /// Broadcast types
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[allow(clippy::upper_case_acronyms)]
 pub enum BroadcastType {
     CrdtOp(LogOp),
 }
@@ -92,20 +93,27 @@ impl From<LogOp> for BroadcastType {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BroadcastPacked {
     pub dot: Option<Dot<Actor>>,
+    pub id: Uuid,
     pub data: Vec<u8>,
 }
 
 impl BroadcastPacked {
     pub fn new(dot: Option<Dot<Actor>>, data: Vec<u8>) -> Self {
-        Self { dot, data }
+        Self {
+            dot,
+            data,
+            id: uuid7(),
+        }
     }
 
-    pub fn serialize(&self) -> Result<Vec<u8>, bincode::Error> {
-        bincode::serialize(&self)
+    pub fn serialize(&self) -> Result<InternalMessage, bincode::Error> {
+        bincode_option()
+            .serialize(&self)
+            .map(InternalMessage::Broadcast)
     }
 
     pub fn deserialize(&self) -> Result<Broadcast, bincode::Error> {
-        bincode::deserialize(&self.data)
+        self.try_into()
     }
 }
 
@@ -113,11 +121,7 @@ impl TryFrom<Broadcast> for BroadcastPacked {
     type Error = bincode::Error;
 
     fn try_from(b: Broadcast) -> Result<Self, Self::Error> {
-        BroadcastPacked {
-            dot: b.dot(),
-            data: bincode::serialize(&b)?,
-        }
-        .pipe(Ok)
+        (&b).try_into()
     }
 }
 
@@ -127,17 +131,28 @@ impl TryFrom<&Broadcast> for BroadcastPacked {
     fn try_from(b: &Broadcast) -> Result<Self, Self::Error> {
         BroadcastPacked {
             dot: b.dot(),
-            data: bincode::serialize(&b)?,
+            data: bincode_option().serialize(&b)?,
+            id: uuid7(),
         }
+        .tap(|b| trace!(target: "message", bytes=?b.data, "Broadcast to BroadcastPack"))
         .pipe(Ok)
     }
 }
 
-impl TryFrom<BroadcastPacked> for BroadcastType {
+impl TryFrom<BroadcastPacked> for Broadcast {
     type Error = bincode::Error;
 
     fn try_from(b: BroadcastPacked) -> Result<Self, Self::Error> {
-        bincode::deserialize(&b.data)
+        (&b).try_into()
+    }
+}
+
+impl TryFrom<&BroadcastPacked> for Broadcast {
+    type Error = bincode::Error;
+
+    fn try_from(b: &BroadcastPacked) -> Result<Self, Self::Error> {
+        trace!(target: "message", bytes=?b.data, "BroadcastPack to Broadcast");
+        bincode_option().deserialize(&b.data)
     }
 }
 
@@ -156,12 +171,6 @@ fn test_serialize() {
 
     use crate::{model::LogOp, Actor, Log};
 
-    let m = Envelope {
-        addr: SocketAddr::from_str("127.0.0.1:8000").unwrap(),
-        topic: "test".to_owned(),
-        body: Message::RequestSnapshot,
-        id: uuid7(),
-    };
     let b = Broadcast::new_crdt(LogOp::Insert {
         id: Identifier::between(None, None, Dot::new(Actor::random(), 1).into()),
         val: Log::new("oops"),
@@ -169,11 +178,19 @@ fn test_serialize() {
     .pack()
     .unwrap();
 
-    let mb = bincode::serialize(&m).unwrap();
-    let m2 = bincode::deserialize(&mb).unwrap();
-    assert_eq!(m, m2);
-
-    let bb = bincode::serialize(&b).unwrap();
-    let b2 = bincode::deserialize(&bb).unwrap();
+    let bb = bincode_option().serialize(&b).unwrap();
+    let b2 = bincode_option().deserialize(&bb).unwrap();
     assert_eq!(b, b2);
+
+    let m = Envelope {
+        addr: SocketAddr::from_str("127.0.0.1:8000").unwrap(),
+        topic: "test".to_owned(),
+        body: Message::Swim(bb.into()),
+        id: uuid7(),
+    };
+
+    let mb = bincode_option().serialize(&m).unwrap();
+    let m2 = bincode_option().deserialize(&mb).unwrap();
+
+    assert_eq!(m, m2);
 }

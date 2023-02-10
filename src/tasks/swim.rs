@@ -1,31 +1,30 @@
 //! Background task of SWIM
 
-use std::{borrow::Cow, io::Cursor, ops::Deref, pin::pin, sync::Arc};
+use std::{borrow::Cow, fmt::Debug, ops::Deref, pin::pin, sync::Arc};
 
-use bincode::DefaultOptions;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use color_eyre::Result;
 use crdts::SyncedCmRDT;
 use foca::{BincodeCodec, BroadcastHandler, Foca, Invalidates, Notification, Runtime};
 use futures::future::{select, Either};
 use kanal::AsyncSender;
 use rand::rngs::StdRng;
-use serde::de::DeserializeOwned;
-use tap::Pipe;
+use tap::{Pipe, Tap, TapOptional};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, trace};
+use tracing::{debug, info, info_span, trace};
 use uuid7::uuid7;
 
 use crate::{
+    codec::{bincode_option, try_decode, BincodeOptions},
     model::Id,
     tasks::{Context, DEFAULT_CHANNEL_SIZE},
     util::{ok_or_break, ok_or_warn},
-    BroadcastPacked, BroadcastType, Envelope, InternalMessage, Message,
+    Broadcast, BroadcastPacked, BroadcastType, Envelope, InternalMessage, Message,
 };
 
 #[allow(clippy::upper_case_acronyms)]
-pub type SWIM = Foca<Id, BincodeCodec<DefaultOptions>, StdRng, OrkasBroadcastHandler>;
+pub type SWIM = Foca<Id, BincodeCodec<BincodeOptions>, StdRng, OrkasBroadcastHandler>;
 
 /// Shim runtime that implements [`foca::Runtime`] trait.
 #[must_use]
@@ -123,7 +122,7 @@ impl SwimJobHandle {
         Ok(())
     }
 
-    pub async fn broadcast(&self, msg: BroadcastType) -> Result<()> {
+    pub async fn broadcast(&self, msg: Broadcast) -> Result<()> {
         // self.send_internal(InternalMessage::Broadcast(msg)).await
         Ok(())
     }
@@ -154,6 +153,10 @@ impl Context {
 
 impl Invalidates for BroadcastPacked {
     fn invalidates(&self, other: &Self) -> bool {
+        // Two same broadcasts always invalidate each other (Or is it?)
+        if self.id == other.id {
+            return true;
+        }
         let b: Option<bool> = try { self.dot? >= other.dot? };
         b.unwrap_or(false)
     }
@@ -173,31 +176,6 @@ impl OrkasBroadcastHandler {
     }
 }
 
-fn try_decode<T: DeserializeOwned>(data: impl Buf) -> Result<Option<T>, bincode::Error> {
-    if data.chunk().is_empty() {
-        return Ok(None);
-    }
-    let mut cur = Cursor::new(data.chunk());
-
-    let res = bincode::deserialize_from::<_, T>(&mut cur);
-    trace!("Read {}", cur.position());
-    data.advance(cur.position() as usize);
-
-    match res {
-        Ok(T) => Ok(Some(T)),
-        // Buffer is not filled (yet), not an error. Leave the cursor untouched so that
-        // remaining bytes can be used in the next decode attempt.
-        Err(e) => match *e {
-            // Buffer is not filled (yet), not an error. Leave the cursor untouched so that
-            // remaining bytes can be used in the next decode attempt.
-            bincode::ErrorKind::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Ok(None);
-            }
-            _ => return Err(e.into()),
-        },
-    }
-}
-
 impl BroadcastHandler<Id> for OrkasBroadcastHandler {
     type Broadcast = BroadcastPacked;
     type Error = bincode::Error;
@@ -206,38 +184,36 @@ impl BroadcastHandler<Id> for OrkasBroadcastHandler {
         &mut self,
         mut data: impl bytes::Buf,
     ) -> std::result::Result<Option<Self::Broadcast>, Self::Error> {
-        let bind = &self.ctx.config.bind;
-        let _s = tracing::info_span!("swim.broadcast_handler", addr = %bind).entered();
+        let _s = tracing::info_span!("swim.broadcast_handler").entered();
 
-        if data.chunk().is_empty() {
-            return Ok(None);
-        }
-
-        let mut cur = Cursor::new(data.chunk());
-        let res: BroadcastPacked = bincode::deserialize_from(&mut cur)?;
-        trace!("Read {}", cur.position());
-        data.advance(cur.position() as usize);
-
-        trace!("Broadcast pack received");
+        trace!(target: "swim.broadcast_handler", "{:?}", data.chunk());
 
         let topic = &self.topic;
-        let inner = res.deserialize()?;
 
-        trace!("Broadcast received");
-
-        match inner.data {
-            BroadcastType::CrdtOp(op) => {
-                if let Some(topic) = self.ctx.topics.get(topic) {
-                    info!(?op, "Apply crdt op");
-                    topic.value().logs.synced_apply(op);
-                    info!(list = ?topic.value().logs.len());
-                    Ok(Some(res))
-                } else {
-                    info!(topic, "Non-exist topic, ignore",);
-                    Ok(None)
+        if let Ok(Some(broadcast)) = try_decode::<Broadcast>(&mut data, bincode_option()) {
+            debug!(broadcast = ?broadcast, "Broadcast received");
+            match broadcast.data {
+                BroadcastType::CrdtOp(op) => {
+                    if let Some(topic) = self.ctx.topics.get(topic) {
+                        info!(?op, "Applying crdt op");
+                        topic.value().logs.synced_apply(op);
+                        info!(list_len = ?topic.value().logs.len());
+                    } else {
+                        info!(topic, "Non-exist topic, ignore");
+                    }
                 }
             }
+            None
+        } else {
+            try_decode::<BroadcastPacked>(&mut data, bincode_option())?
+                .tap(|_| debug!(target: "swim.broadcast_handler", "Broadcast pack received"))
+                .filter(|pack| !self.ctx.seen(&pack.id))
+                .tap_some(|pack| {
+                    debug!(target: "swim.broadcast_handler", ?pack, "Fresh broadcast pack");
+                    self.ctx.saw(pack.id)
+                })
         }
+        .pipe(Ok)
     }
 }
 
@@ -251,6 +227,8 @@ pub(crate) fn spawn_swim(topic: String, mut swim: SWIM, ctx: Context) -> SwimJob
         let mut rt = ctx.swim_runtime(&topic);
 
         loop {
+            debug!(id = ?swim.identity());
+
             if token.is_cancelled() {
                 // TODO: graceful shutdown by reading all remaining messages and close the
                 // channel.
@@ -261,7 +239,11 @@ pub(crate) fn spawn_swim(topic: String, mut swim: SWIM, ctx: Context) -> SwimJob
 
             match select(l, r).await {
                 Either::Left((internal, _)) => {
-                    let msg = ok_or_break!("swim", internal, topic);
+                    trace!(?internal, "swim.internal");
+
+                    let _s = info_span!("swim.internal", id = ?swim.identity()).entered();
+
+                    let msg = ok_or_break!("swi.internal", internal, topic);
                     match msg {
                         InternalMessage::Timer(event) => {
                             ok_or_warn!("swim.timer", swim.handle_timer(event, &mut rt));
@@ -272,6 +254,9 @@ pub(crate) fn spawn_swim(topic: String, mut swim: SWIM, ctx: Context) -> SwimJob
                     }
                 }
                 Either::Right((external, _)) => {
+                    trace!(?external, "swim.external");
+                    let _s = info_span!("swim.external", id = ?swim.identity()).entered();
+
                     let msg = ok_or_break!("swim", external, topic);
                     ok_or_warn!("swim.handle_data", swim.handle_data(msg.deref(), &mut rt))
                 }

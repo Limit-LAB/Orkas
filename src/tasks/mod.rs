@@ -3,7 +3,8 @@ mod_use::mod_use![conn, swim];
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
-use crossbeam_skiplist::SkipMap;
+use crdts::{CmRDT, SyncedCmRDT};
+use crossbeam_skiplist::{SkipMap, SkipSet};
 use futures::future::join_all;
 use tap::Pipe;
 use tokio::{
@@ -12,12 +13,13 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
+use uuid7::Uuid;
 
 use crate::{
     codec::{MessageSink, MessageStream},
     model::{Actor, Envelope, State, Topic},
     util::{CRDTUpdater, Flag},
-    Broadcast, InternalMessage, OrkasConfig,
+    Broadcast, OrkasConfig,
 };
 
 type Inbound = MessageStream<OwnedReadHalf>;
@@ -36,6 +38,7 @@ pub struct Context {
     pub topics: Arc<SkipMap<String, Topic>>,
     pub waiters: Arc<SkipMap<SocketAddr, Flag>>,
     pub config: Arc<OrkasConfig>,
+    seen: Arc<SkipSet<Uuid>>,
     actor: Actor,
 
     cancel_token: CancellationToken,
@@ -49,26 +52,33 @@ impl Context {
         self.conn_outbound.close();
     }
 
+    /// Test if a broadcast is seen.
+    pub fn seen(&self, id: &Uuid) -> bool {
+        self.seen.contains(id)
+    }
+
+    /// Mark broadcast as seen.
+    pub fn saw(&self, id: Uuid) {
+        self.seen.insert(id);
+    }
+
     pub fn state(&self) -> State {
         todo!()
     }
 
-    pub async fn update<F>(&self, topic: String, func: F) -> Result<bool>
+    pub async fn update<F>(&self, topic: impl AsRef<str>, updater: F) -> Result<bool>
     where
         F: CRDTUpdater,
         F::Error: Send + Sync + 'static,
     {
-        let Some(t) = self.topics.get(&topic) else { bail!("Topic does not exist") };
-        let Some(op) = func.update(&t.value().logs, self.actor)? else { return Ok(false) };
+        let Some(t) = self.topics.get(topic.as_ref()) else { bail!("Topic does not exist") };
+        let logs = &t.value().logs;
+        let Some(op) = updater.update(logs, self.actor)? else { return Ok(false) };
+        logs.synced_apply(op.clone());
 
         t.value()
             .swim
-            .send_internal(
-                Broadcast::new_crdt(op)
-                    .pack()?
-                    .serialize()?
-                    .pipe(InternalMessage::Broadcast),
-            )
+            .send_internal(Broadcast::new_crdt(op).pack()?.serialize()?)
             .await?;
 
         Ok(true)
@@ -94,10 +104,12 @@ pub fn spawn_background(config: Arc<OrkasConfig>) -> Background {
     let cancel_token = CancellationToken::new();
     let topics = SkipMap::new().pipe(Arc::new);
     let waiters = SkipMap::new().pipe(Arc::new);
+    let seen = SkipSet::new().pipe(Arc::new);
 
     let ctx = Context {
         actor: Actor::random(),
         msg,
+        seen,
         conn_inbound,
         conn_outbound,
         topics,

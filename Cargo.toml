@@ -16,7 +16,7 @@ rcgen  = "0.10.0"
 rustls = "0.20.8"
 
 ## Membership
-foca = { version = "0.10.0", features = ["serde", "bincode-codec", "tracing"] } # TODO: implment own swim with topic
+foca = { version = "0.10.0", features = ["serde", "bincode-codec", "tracing"] }
 
 ## Runtime
 tokio   = { version = "1.25.0", features = ["net", "macros"] }

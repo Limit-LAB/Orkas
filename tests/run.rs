@@ -7,7 +7,10 @@ use tracing::info;
 
 #[tokio::test]
 async fn test_run() {
-    std::env::set_var("RUST_LOG", "INFO");
+    std::env::set_var(
+        "RUST_LOG",
+        "INFO,message=TRACE,swim.broadcast_handler=TRACE",
+    );
     tracing_subscriber::fmt::init();
 
     let addr_1 = SocketAddr::from_str("127.0.0.1:8000").unwrap();
@@ -36,13 +39,9 @@ async fn test_run() {
 
     sleep(Duration::from_secs(3)).await;
 
-    node_1.read("test", |e: &LogList| -> Result<_, Infallible> {
-        println!("{:?}", e.len());
-        Ok(())
-    });
+    let len1 = node_1.read("test", |e: &LogList| e.len());
 
-    node_2.read("test", |e: &LogList| -> Result<_, Infallible> {
-        println!("{:?}", e.len());
-        Ok(())
-    });
+    let len2 = node_2.read("test", |e: &LogList| e.len());
+
+    assert_eq!(len1, len2);
 }

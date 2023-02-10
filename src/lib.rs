@@ -6,7 +6,6 @@
 
 use std::{net::SocketAddr, time::Duration};
 
-use bincode::DefaultOptions;
 use color_eyre::{eyre::bail, Result};
 use foca::BincodeCodec;
 use rand::{rngs::StdRng, thread_rng, SeedableRng};
@@ -15,6 +14,7 @@ use uuid7::uuid7;
 
 pub use crate::model::*;
 use crate::{
+    codec::bincode_option,
     tasks::{spawn_background, spawn_swim, Background, Context, OrkasBroadcastHandler, SWIM},
     util::{CRDTReader, CRDTUpdater},
 };
@@ -77,7 +77,7 @@ impl Orkas {
             Id::from(ctx.config.bind),
             ctx.config.foca.clone(),
             StdRng::from_rng(thread_rng())?,
-            BincodeCodec(DefaultOptions::new()),
+            BincodeCodec(bincode_option()),
             OrkasBroadcastHandler::new(&topic, ctx.clone()),
         );
 
@@ -124,7 +124,7 @@ impl Orkas {
             Id::from(ctx.config.bind),
             ctx.config.foca.clone(),
             StdRng::from_rng(thread_rng())?,
-            BincodeCodec(DefaultOptions::new()),
+            BincodeCodec(bincode_option()),
             OrkasBroadcastHandler::new(&topic, ctx.clone()),
         );
 
@@ -151,13 +151,21 @@ impl Orkas {
         Ok(())
     }
 
-    /// Update a topic and sync with other nodes in the cluster
-    pub async fn update<F>(&self, topic: impl Into<String>, func: F) -> Result<bool>
+    /// Update a topic and sync with other nodes in the cluster. This update
+    /// will be applied to local cluster state first and distributed to
+    /// other nodes in the cluster via swim broadcast.
+    ///
+    /// A [`CRDTUpdater`] will receive a [`LogList`] and `actor` of the node
+    /// upon updating, then optionally returns an [`Op`] to be applied to the
+    /// [`LogList`].
+    ///
+    /// [`Op`]: crdts::list::Op
+    pub async fn update<F>(&self, topic: impl AsRef<str>, updater: F) -> Result<bool>
     where
         F: CRDTUpdater,
         F::Error: std::error::Error + Send + Sync + 'static,
     {
-        self.ctx().update(topic.into(), func).await
+        self.ctx().update(topic, updater).await
     }
 
     /// Read a topic and derive data from it

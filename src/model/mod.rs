@@ -9,7 +9,6 @@ mod_use::mod_use![config, message, event,];
 use std::{
     fmt::Display,
     net::SocketAddr,
-    sync::LazyLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -78,9 +77,13 @@ impl From<Timestamp> for u64 {
 
 #[test]
 fn test_ts_serde_overhead() {
+    use bincode::Options;
+
+    use crate::codec::bincode_option;
+
     assert_eq!(
-        bincode::serialize(&Timestamp(0)).unwrap(),
-        bincode::serialize(&0u64).unwrap()
+        bincode_option().serialize(&Timestamp(0)).unwrap(),
+        bincode_option().serialize(&0u64).unwrap()
     );
 }
 
