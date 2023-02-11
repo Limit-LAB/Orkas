@@ -2,13 +2,14 @@
 
 use std::{borrow::Cow, fmt::Debug, ops::Deref, sync::Arc};
 
-use bytes::Bytes;
+use bincode::Options;
+use bytes::{BufMut, Bytes, BytesMut};
 use color_eyre::Result;
 use crdts::SyncedCmRDT;
 use foca::{BincodeCodec, BroadcastHandler, Foca, Invalidates, Notification, Runtime};
 use kanal::AsyncSender;
 use rand::rngs::StdRng;
-use tap::Pipe;
+use tap::{Conv, Pipe, TryConv};
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info_span, trace};
@@ -19,7 +20,7 @@ use crate::{
     model::Id,
     tasks::{Context, DEFAULT_CHANNEL_SIZE},
     util::{ok_or_break, ok_or_warn},
-    Broadcast, BroadcastPacked, BroadcastType, Envelope, InternalMessage, Message,
+    Broadcast, BroadcastPacked, BroadcastTag, Envelope, InternalMessage, Message,
 };
 
 #[allow(clippy::upper_case_acronyms)]
@@ -122,8 +123,7 @@ impl SwimJobHandle {
     }
 
     pub async fn broadcast(&self, msg: Broadcast) -> Result<()> {
-        // self.send_internal(InternalMessage::Broadcast(msg)).await
-        Ok(())
+        self.send_internal(msg.pack()?.serialize()?).await
     }
 
     pub fn running(&self) -> bool {
@@ -150,28 +150,60 @@ impl Context {
     }
 }
 
-impl Invalidates for BroadcastPacked {
+impl Invalidates for BroadcastTag {
     fn invalidates(&self, other: &Self) -> bool {
         // Two same broadcasts always invalidate each other (Or is it?)
-        if self.id == other.id {
-            return true;
-        }
-        let b: Option<bool> = try { self.dot? >= other.dot? };
-        b.unwrap_or(false)
+        self.id == other.id
+    }
+}
+
+impl Invalidates for BroadcastPacked {
+    fn invalidates(&self, other: &Self) -> bool {
+        self.tag.invalidates(&other.tag)
     }
 }
 
 pub struct OrkasBroadcastHandler {
     ctx: Context,
     topic: String,
+    buf: BytesMut,
 }
 
 impl OrkasBroadcastHandler {
     pub fn new(topic: impl Into<String>, ctx: Context) -> Self {
         Self {
             topic: topic.into(),
+            buf: BytesMut::new(),
             ctx,
         }
+    }
+
+    pub fn pack(&mut self, bc: &Broadcast) -> Result<BroadcastPacked, bincode::Error> {
+        let tag = bc.tag();
+
+        let opt = bincode_option();
+        let len: usize = opt
+            .serialized_size(&tag)?
+            .try_conv::<usize>()
+            .expect("Broadcast size too big")
+            + opt
+                .serialized_size(&bc)?
+                .try_conv::<usize>()
+                .expect("Broadcast size too big")
+            + 8;
+
+        self.buf.reserve(len);
+        let mut buf = self.buf.split();
+        buf.put_u64(len as _);
+        let mut buf = buf.writer();
+
+        opt.serialize_into(&mut buf, &tag)?;
+        opt.serialize_into(&mut buf, &bc)?;
+
+        let data = buf.into_inner().freeze();
+        trace!("Broadcast packed: {:?}", data);
+
+        Ok(BroadcastPacked { tag, data })
     }
 }
 
@@ -185,35 +217,38 @@ impl BroadcastHandler<Id> for OrkasBroadcastHandler {
     ) -> std::result::Result<Option<Self::Broadcast>, Self::Error> {
         let _s = tracing::info_span!("swim.broadcast_handler").entered();
 
-        trace!("{:?}", data.chunk());
+        trace!(broadcast = ?data.chunk());
 
         let topic = &self.topic;
 
-        if let Ok(Some(pack)) = try_decode::<BroadcastPacked>(&mut data, bincode_option()) {
-            debug!("Broadcast pack received");
-            if self.ctx.seen(&pack.id) {
-                return Ok(None);
-            }
-            debug!(?pack, "Fresh broadcast pack");
-            self.ctx.saw(pack.id);
-            Some(pack)
-        } else if let Some(broadcast) = try_decode::<Broadcast>(&mut data, bincode_option())? {
-            debug!(broadcast = ?broadcast, "Broadcast received");
-            match broadcast.data {
-                BroadcastType::CrdtOp(op) => {
-                    if let Some(topic) = self.ctx.topics.get(topic) {
-                        debug!(?op, "Applying crdt op");
-                        topic.value().logs.synced_apply(op);
-                    } else {
-                        debug!(topic, "Non-exist topic, ignore");
-                    }
+        let Some((tag, broadcast)) = BroadcastPacked::deserialize(data.chunk())? else {
+            return Ok(None);
+        };
+
+        let len = data.get_u64() as usize;
+
+        if self.ctx.seen(&tag.id) {
+            return Ok(None);
+        } else {
+            self.ctx.saw(tag.id);
+        }
+
+        let buf = data.copy_to_bytes(len);
+
+        debug!(broadcast = ?broadcast, "Broadcast received");
+
+        match broadcast {
+            Broadcast::CrdtOp(op) => {
+                if let Some(topic) = self.ctx.topics.get(topic) {
+                    debug!(?op, "Applying crdt op");
+                    topic.value().logs.synced_apply(op);
+                } else {
+                    debug!(topic, "Non-exist topic, ignore");
                 }
             }
-            None
-        } else {
-            None
         }
-        .pipe(Ok)
+
+        Ok(Some(tag.pack(buf)?))
     }
 }
 
@@ -227,8 +262,6 @@ pub(crate) fn spawn_swim(topic: String, mut swim: SWIM, ctx: Context) -> SwimJob
         let mut rt = ctx.swim_runtime(&topic);
 
         loop {
-            debug!(id = ?swim.identity());
-
             select! {
                 _ = token.cancelled() => {
                     break;

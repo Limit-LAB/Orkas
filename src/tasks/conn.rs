@@ -162,7 +162,7 @@ pub(super) async fn outbound_task(
             match conn.send(msg.clone()).await {
                 Ok(_) => break,
                 Err(e) => {
-                    debug!(target: "outbound", error = %e, "Send failed, retry");
+                    debug!(target: "outbound", error = ?e, "Send failed, retry");
                     map.remove(&addr);
                 }
             }

@@ -1,13 +1,14 @@
 /// A framed codec that uses bincode to serialize and deserialize messages.
 use std::{any::type_name, fmt::Debug, io::Cursor};
 
+use bincode::serialized_size;
 use bytes::{Buf, BufMut, BytesMut};
 use color_eyre::{eyre::Context, Result};
 use futures::{Sink, Stream};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
-use tracing::{debug, instrument, trace, warn};
+use tracing::{instrument, trace, warn};
 
 use crate::Envelope;
 
@@ -26,8 +27,7 @@ mod bincode_option_mod {
     pub fn bincode_option() -> BincodeOptions {
         bincode::DefaultOptions::new()
             .reject_trailing_bytes()
-            .with_limit(1 << 8)
-        // .with_varint_encoding()
+            .with_limit(1 << 12)
     }
 }
 
@@ -114,13 +114,13 @@ impl<T: Serialize, O: bincode::Options + Clone> Encoder<T> for SerdeBincodeCodec
     type Error = color_eyre::eyre::Error;
 
     fn encode(&mut self, item: T, dst: &mut BytesMut) -> std::result::Result<(), Self::Error> {
-        let b = self
-            .option
-            .clone()
-            .serialize(&item)
-            .wrap_err_with(|| format!("Failed to serialize `{}`", type_name::<T>()))?;
+        let actual_size = self.option.clone().serialized_size(&item)?;
+        dst.reserve(actual_size.try_into().expect("Message too large"));
 
-        dst.put_slice(&b);
+        self.option
+            .clone()
+            .serialize_into(dst.writer(), &item)
+            .wrap_err_with(|| format!("Failed to serialize `{}`", type_name::<T>()))?;
 
         Ok(())
     }
@@ -161,7 +161,7 @@ pub fn try_decode<T: DeserializeOwned + Debug>(
     match res {
         Ok(val) => {
             data.advance(cur.position() as usize);
-            debug!(?val, "Decoded");
+            trace!(?val, "Decoded");
 
             Ok(Some(val))
         }
@@ -216,31 +216,31 @@ fn test_codec() {
 #[tokio::test]
 async fn test_framed() -> Result<()> {
     use futures::{SinkExt, StreamExt};
-    use serde::Deserialize;
     use tap::Pipe;
     use tracing::info;
+    use uuid7::uuid7;
 
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
         .try_init()
         .pipe(drop);
-    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-    struct A {
-        a: String,
-        num: u32,
-    }
 
-    let a = A {
-        a: "hello\n\n123".to_string(),
-        num: 10,
-    };
-    let b = A {
-        a: "hello".to_owned(),
-        num: 114514,
-    };
-
-    let enc = SerdeBincodeCodec::<A, _>::new();
+    let enc = SerdeBincodeCodec::<Envelope, _>::new();
     let mut w = vec![];
+
+    let a = Envelope {
+        addr: "127.0.0.1:114".parse().unwrap(),
+        body: crate::Message::Swim(vec![1, 1, 4, 5, 1, 4].into()),
+        id: uuid7(),
+        topic: "test".to_string(),
+    };
+
+    let b = Envelope {
+        addr: "127.0.0.2:514".parse().unwrap(),
+        body: crate::Message::Swim(vec![1, 9, 1, 9, 8, 1, 0].into()),
+        id: uuid7(),
+        topic: "test2".to_string(),
+    };
 
     {
         let mut w = FramedWrite::new(&mut w, enc);

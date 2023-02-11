@@ -52,7 +52,11 @@ impl Orkas {
     }
 
     pub(crate) fn ctx(&self) -> &Context {
-        &self.background.ctx
+        self.background.ctx()
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.background.addr()
     }
 
     // TODO: use `ToSocketAddrs` instead of `SocketAddr`.
@@ -75,7 +79,7 @@ impl Orkas {
         ctx.conn_outbound.send((addr, recv)).await?;
 
         let mut swim = SWIM::with_custom_broadcast(
-            Id::from(ctx.config.bind),
+            Id::from(self.local_addr()),
             ctx.config.foca.clone(),
             StdRng::from_rng(thread_rng())?,
             BincodeCodec(bincode_option()),
@@ -117,12 +121,12 @@ impl Orkas {
     }
 
     /// Create a new topic in current node
-    pub async fn new_topic(&self, topic: impl Into<String>) -> Result<()> {
+    pub fn new_topic(&self, topic: impl Into<String>) -> Result<()> {
         let topic = topic.into();
         let ctx = self.ctx();
 
         let swim = SWIM::with_custom_broadcast(
-            Id::from(ctx.config.bind),
+            Id::from(self.local_addr()),
             ctx.config.foca.clone(),
             StdRng::from_rng(thread_rng())?,
             BincodeCodec(bincode_option()),

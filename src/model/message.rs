@@ -1,14 +1,14 @@
 use std::net::SocketAddr;
 
 use bincode::Options;
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crdts::Dot;
-use tap::{Pipe, Tap};
+use tap::{Pipe, TryConv};
 use tracing::trace;
 use uuid7::{uuid7, Uuid};
 
 use crate::{
-    codec::bincode_option,
+    codec::{bincode_option, try_decode},
     model::{Id, LogList, LogOp},
     Actor,
 };
@@ -44,115 +44,122 @@ pub enum InternalMessage {
     /// Timer event of foca
     Timer(foca::Timer<Id>),
     /// Broadcast various messages
-    Broadcast(Vec<u8>),
+    Broadcast(Bytes),
     // Join()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Broadcast {
-    pub data: BroadcastType,
-}
-
-impl Broadcast {
-    pub fn new_crdt(op: LogOp) -> Self {
-        Self {
-            data: BroadcastType::CrdtOp(op),
-        }
-    }
-
-    pub fn pack(&self) -> Result<BroadcastPacked, bincode::Error> {
-        BroadcastPacked::try_from(self)
-    }
-
-    pub fn into_packed(self) -> Result<BroadcastPacked, bincode::Error> {
-        BroadcastPacked::try_from(self)
-    }
-}
-
-/// Broadcast types
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum BroadcastType {
+pub enum Broadcast {
     CrdtOp(LogOp),
 }
 
 impl Broadcast {
+    pub fn new_crdt(op: LogOp) -> Self {
+        Broadcast::CrdtOp(op)
+    }
+
     /// Try to get the dot of the message for invalidation
     pub fn dot(&self) -> Option<Dot<Actor>> {
-        match &self.data {
-            BroadcastType::CrdtOp(op) => op.dot().pipe(Some),
+        match self {
+            Broadcast::CrdtOp(op) => op.dot().pipe(Some),
         }
+    }
+
+    pub fn tag(&self) -> BroadcastTag {
+        BroadcastTag::new(self.dot())
+    }
+
+    pub fn pack(&self) -> Result<BroadcastPacked, bincode::Error> {
+        let tag = self.tag();
+
+        let opt = bincode_option();
+        let len: usize = opt
+            .serialized_size(&tag)?
+            .try_conv::<usize>()
+            .expect("Broadcast size too big")
+            + opt
+                .serialized_size(&self)?
+                .try_conv::<usize>()
+                .expect("Broadcast size too big");
+
+        let mut buf = BytesMut::with_capacity(len + 8);
+        buf.put_u64(len as _);
+        let mut buf = buf.writer();
+
+        opt.serialize_into(&mut buf, &tag)?;
+        opt.serialize_into(&mut buf, &self)?;
+
+        let data = buf.into_inner().freeze();
+        trace!("Broadcast packed: {:?}", data);
+
+        Ok(BroadcastPacked { tag, data })
     }
 }
 
-impl From<LogOp> for BroadcastType {
+/// Broadcast types
+
+impl From<LogOp> for Broadcast {
     fn from(op: LogOp) -> Self {
-        BroadcastType::CrdtOp(op)
+        Broadcast::CrdtOp(op)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BroadcastPacked {
-    pub dot: Option<Dot<Actor>>,
-    pub id: Uuid,
-    pub data: Vec<u8>,
+    pub tag: BroadcastTag,
+    pub data: Bytes,
 }
 
 impl BroadcastPacked {
-    pub fn new(dot: Option<Dot<Actor>>, data: Vec<u8>) -> Self {
+    pub fn new(dot: Option<Dot<Actor>>, data: impl Into<Bytes>) -> Self {
         Self {
-            dot,
-            data,
-            id: uuid7(),
+            tag: BroadcastTag::new(dot),
+            data: data.into(),
         }
     }
 
     pub fn serialize(&self) -> Result<InternalMessage, bincode::Error> {
-        bincode_option()
-            .serialize(&self)
-            .map(InternalMessage::Broadcast)
+        Ok(InternalMessage::Broadcast(self.data.clone()))
     }
 
-    pub fn deserialize(&self) -> Result<Broadcast, bincode::Error> {
-        self.try_into()
+    pub fn deserialize(data: &[u8]) -> Result<Option<(BroadcastTag, Broadcast)>, bincode::Error> {
+        let mut buf = data.as_ref();
+        let len = buf.get_u64() as usize;
+
+        if buf.remaining() < len {
+            return Ok(None);
+        }
+
+        let Some(tag) = try_decode::<BroadcastTag>(&mut buf, bincode_option())? else { return Ok(None) };
+        let Some(bc) = try_decode::<Broadcast>(&mut buf, bincode_option())? else { return Ok(None) };
+
+        Ok(Some((tag, bc)))
     }
 }
 
-impl TryFrom<Broadcast> for BroadcastPacked {
-    type Error = bincode::Error;
-
-    fn try_from(b: Broadcast) -> Result<Self, Self::Error> {
-        (&b).try_into()
-    }
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BroadcastTag {
+    pub dot: Option<Dot<Actor>>,
+    pub id: Uuid,
 }
 
-impl TryFrom<&Broadcast> for BroadcastPacked {
-    type Error = bincode::Error;
-
-    fn try_from(b: &Broadcast) -> Result<Self, Self::Error> {
-        BroadcastPacked {
-            dot: b.dot(),
-            data: bincode_option().serialize(&b)?,
+impl BroadcastTag {
+    pub fn new_dot(dot: Dot<Actor>) -> Self {
+        Self {
+            dot: Some(dot),
             id: uuid7(),
         }
-        .tap(|b| trace!(target: "message", bytes=?b.data, "Broadcast to BroadcastPack"))
-        .pipe(Ok)
     }
-}
 
-impl TryFrom<BroadcastPacked> for Broadcast {
-    type Error = bincode::Error;
-
-    fn try_from(b: BroadcastPacked) -> Result<Self, Self::Error> {
-        (&b).try_into()
+    pub fn new(dot: Option<Dot<Actor>>) -> Self {
+        Self { dot, id: uuid7() }
     }
-}
 
-impl TryFrom<&BroadcastPacked> for Broadcast {
-    type Error = bincode::Error;
-
-    fn try_from(b: &BroadcastPacked) -> Result<Self, Self::Error> {
-        trace!(target: "message", bytes=?b.data, "BroadcastPack to Broadcast");
-        bincode_option().deserialize(&b.data)
+    pub fn pack(&self, data: Bytes) -> Result<BroadcastPacked, bincode::Error> {
+        Ok(BroadcastPacked {
+            tag: self.clone(),
+            data,
+        })
     }
 }
 
@@ -193,4 +200,23 @@ fn test_serialize() {
     let m2 = bincode_option().deserialize(&mb).unwrap();
 
     assert_eq!(m, m2);
+}
+
+#[test]
+fn test_pack() {
+    use crdts::Identifier;
+
+    use crate::Log;
+
+    let b = Broadcast::new_crdt(LogOp::Insert {
+        id: Identifier::between(None, None, Dot::new(Actor::random(), 1).into()),
+        val: Log::new("oops"),
+    });
+
+    let p = b.pack().unwrap();
+    let bytes = p.data.as_ref();
+    let (tag, b2) = BroadcastPacked::deserialize(bytes).unwrap().unwrap();
+
+    assert_eq!(tag, p.tag);
+    assert_eq!(b, b2);
 }

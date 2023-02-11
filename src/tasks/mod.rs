@@ -6,7 +6,7 @@ use color_eyre::{eyre::bail, Result};
 use crdts::SyncedCmRDT;
 use crossbeam_skiplist::{SkipMap, SkipSet};
 use futures::future::join_all;
-use tap::Pipe;
+use tap::{Pipe, Tap};
 use tokio::{
     net::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
@@ -15,7 +15,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid7::Uuid;
 
 use crate::{
@@ -75,10 +75,13 @@ impl Context {
         F: CRDTUpdater,
         F::Error: Send + Sync + 'static,
     {
-        let Some(t) = self.topics.get(topic.as_ref()) else { bail!("Topic does not exist") };
+        let topic = topic.as_ref();
+        let Some(t) = self.topics.get(topic) else { bail!("Topic does not exist") };
         let logs = &t.value().logs;
         let Some(op) = updater.update(logs, self.actor)? else { return Ok(false) };
         logs.synced_apply(op.clone());
+
+        debug!(?op, topic, "update sent");
 
         t.value()
             .swim
@@ -122,8 +125,12 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
         cancel_token,
     };
 
-    let listener = TcpListener::bind(ctx.config.bind)
-        .await?
+    let listener = TcpListener::bind(ctx.config.bind).await?;
+    let addr = listener.local_addr()?.tap(|addr| {
+        debug!(?addr, "Listening on");
+    });
+
+    let listener = listener
         .pipe(|l| listener_task(l, ctx.clone()))
         .pipe(tokio::spawn);
 
@@ -132,6 +139,7 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
 
     Background {
         ctx,
+        addr,
         stopped: false,
         handles: vec![inbound, outbound, listener],
     }
@@ -140,7 +148,8 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
 
 // TODO: enum Status { Starting, Running, Stopped }
 pub struct Background {
-    pub(crate) ctx: Context,
+    ctx: Context,
+    addr: SocketAddr,
     handles: Vec<JoinHandle<Result<()>>>,
     stopped: bool,
 }
@@ -160,6 +169,16 @@ impl Background {
         !(self.stopped
             || self.ctx.cancel_token.is_cancelled()
             || self.handles.iter().any(|x| x.is_finished()))
+    }
+
+    /// Get the context of the background tasks.
+    pub fn ctx(&self) -> &Context {
+        &self.ctx
+    }
+
+    /// Get the address of the background tasks.
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
     }
 
     /// Issue a cancellation request to the background tasks.

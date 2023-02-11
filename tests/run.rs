@@ -7,35 +7,48 @@ use tracing::info;
 
 #[tokio::test]
 async fn test_run() {
+    std::env::set_var("RUST_LOG", "INFO,orkas=DEBUG,outbound=DEBUG");
     tracing_subscriber::fmt::init();
 
-    let addr_1 = SocketAddr::from_str("127.0.0.1:8000").unwrap();
-    let addr_2 = SocketAddr::from_str("127.0.0.1:8001").unwrap();
-    let node_1 = OrkasConfig::simple(addr_1).start().await.unwrap();
-    let node_2 = OrkasConfig::simple(addr_2).start().await.unwrap();
+    let node_1 = OrkasConfig::simple("127.0.0.1:0".parse().unwrap())
+        .start()
+        .await
+        .unwrap();
+    let node_2 = OrkasConfig::simple("127.0.0.1:0".parse().unwrap())
+        .start()
+        .await
+        .unwrap();
 
-    node_2.new_topic("test".to_owned()).await.unwrap();
+    let addr_2 = node_2.local_addr();
+
+    node_2.new_topic("test".to_owned()).unwrap();
 
     info!("joining node 1 to node 2");
 
     node_1.join_one("test".to_owned(), addr_2).await.unwrap();
 
-    let updated = node_1
-        .update("test", |e: &LogList, a: Actor| -> Result<_, Infallible> {
-            e.append(Log::new("oops"), a).pipe(Some).pipe(Ok)
-        })
-        .await
+    for i in 100..110 {
+        let updated = node_1
+            .update("test", |e: &LogList, a: Actor| -> Result<_, Infallible> {
+                e.append(Log::new(format!("#{i}")), a).pipe(Some).pipe(Ok)
+            })
+            .await
+            .unwrap();
+        assert!(updated);
+    }
+
+    sleep(Duration::from_secs(5)).await;
+
+    let a = node_1
+        .read("test", |e: &LogList| e.read::<Vec<_>>())
         .unwrap();
 
-    assert!(updated);
+    let b = node_2
+        .read("test", |e: &LogList| e.read::<Vec<_>>())
+        .unwrap();
 
-    sleep(Duration::from_secs(3)).await;
-
-    let len1 = node_1.read("test", |e: &LogList| e.len());
-
-    let len2 = node_2.read("test", |e: &LogList| e.len());
-
-    assert_eq!(len1, len2);
+    info!(?a);
+    info!(?b);
 
     node_1.stop().await;
     node_2.stop().await;
