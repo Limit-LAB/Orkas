@@ -37,7 +37,7 @@ pub(crate) struct SwimRuntime<'a> {
 impl SwimRuntime<'_> {
     /// Flush buffered messages to outbound channel
     pub(crate) async fn flush(&mut self) -> Result<()> {
-        for msg in std::mem::take(&mut self.msg_buf) {
+        for msg in self.msg_buf.drain(..) {
             self.ctx.msg.send(msg).await?;
         }
         Ok(())
