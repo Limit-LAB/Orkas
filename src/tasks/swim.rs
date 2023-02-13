@@ -400,8 +400,6 @@ impl foca::BroadcastHandler<Id> for BroadcastHandler {
         match broadcast {
             Broadcast::CrdtOp(_) => todo!(),
             Broadcast::Events(e) => {
-                tracing::info!(len = e.len(), "Events");
-
                 for event in e.into_inner() {
                     tracing::debug!(event = ?event, "Event received");
                     // TODO: Handle event
