@@ -234,6 +234,7 @@ pub struct SwimJobHandle {
     event: EventProducer,
 }
 
+/// State of the background SWIM job
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SwimState {
     /// All components are running
@@ -270,8 +271,9 @@ impl SwimJobHandle {
         self.event.send(event).map_err(Into::into)
     }
 
-    pub async fn broadcast(&self, b: Broadcast) -> Result<()> {
-        self.send_internal(InternalMessage::Broadcast(b)).await
+    pub async fn broadcast(&self, b: impl Into<Broadcast>) -> Result<()> {
+        self.send_internal(InternalMessage::Broadcast(b.into()))
+            .await
     }
 
     pub fn state(&self) -> SwimState {

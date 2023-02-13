@@ -1162,9 +1162,9 @@ checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "uuid7"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9b091aab74116c4ad92cd04a53e98ac64967a8d22dfc407d447a8f7ab58bc86"
+checksum = "83b5d002801870acd99df5c701e289a2ecf985b04e8d6ae2526318622d0c9a7d"
 dependencies = [
  "fstr",
  "rand 0.8.5",

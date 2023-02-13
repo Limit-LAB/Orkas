@@ -143,10 +143,6 @@ pub(super) async fn outbound_task(
         // TODO: better retry
         let mut retry = 3;
         loop {
-            if retry == 0 {
-                warn!(target: "outbound", %addr, "Failed to send message");
-                break;
-            }
             if let hash_map::Entry::Vacant(entry) = map.entry(addr) {
                 let conn = TcpStream::connect(addr)
                     .await
@@ -158,14 +154,19 @@ pub(super) async fn outbound_task(
                 drop(ctx.conn_inbound.send(stream).await);
             };
             let conn = map.get_mut(&addr).unwrap();
-            match conn.send(msg.clone()).await {
+            let e = match conn.send(msg.clone()).await {
                 Ok(_) => break,
                 Err(e) => {
                     debug!(target: "outbound", error = ?e, "Send failed, retry");
                     map.remove(&addr);
+                    e
                 }
-            }
+            };
             retry -= 1;
+            if retry == 0 {
+                warn!(target: "outbound", error = ?e, %addr, "Failed to send message");
+                break;
+            }
         }
     }
     Ok(())

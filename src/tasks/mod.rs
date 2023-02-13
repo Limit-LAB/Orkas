@@ -21,8 +21,8 @@ use crate::{
     codec::{MessageSink, MessageStream},
     consts::DEFAULT_CHANNEL_SIZE,
     model::{Actor, Envelope, State, Topic},
-    util::{CRDTUpdater, Flag},
-    Broadcast, Event, Log, LogList, OrkasConfig,
+    util::{CRDTReader, CRDTUpdater, Flag},
+    Event, Log, LogList, OrkasConfig,
 };
 
 type Inbound = MessageStream<OwnedReadHalf>;
@@ -83,10 +83,7 @@ impl Context {
         logs.synced_apply(op.clone());
         debug!(?op, topic, "update sent");
 
-        t.value()
-            .swim
-            .send_internal(Broadcast::new_crdt(op))
-            .await?;
+        t.value().swim.broadcast(op).await?;
 
         Ok(true)
     }
@@ -124,14 +121,27 @@ impl<'a> TopicEntry<'a> {
         Self { entry }
     }
 
-    pub fn crdt(&self) -> &LogList {
+    /// Get the CRDT struct.
+    pub(crate) fn crdt(&self) -> &LogList {
         &self.entry.value().logs
     }
 
-    pub fn swim(&self) -> &SwimJobHandle {
+    /// Get the swim job handle.
+    pub(crate) fn swim(&self) -> &SwimJobHandle {
         &self.entry.value().swim
     }
 
+    /// Get the swim state.
+    pub fn swim_state(&self) -> SwimState {
+        self.swim().state()
+    }
+
+    /// Read from the CRDT.
+    pub fn read<R: CRDTReader>(&self, reader: R) -> R::Return {
+        reader.read(self.crdt())
+    }
+
+    /// Get the topic name.
     pub fn name(&self) -> &str {
         self.entry.key()
     }
