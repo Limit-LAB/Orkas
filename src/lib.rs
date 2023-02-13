@@ -20,6 +20,7 @@ use crate::{
 };
 
 mod codec;
+pub mod consts;
 mod model;
 mod tasks;
 mod util;

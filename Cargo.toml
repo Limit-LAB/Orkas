@@ -20,7 +20,7 @@ foca = { version = "0.10.0", features = ["serde", "bincode-codec", "tracing"] }
 
 ## Runtime
 tokio   = { version = "1.25.0", features = ["net", "macros"] }
-futures = "0.3.26"
+futures = { version = "0.3.26", default-features = false, features = ["alloc"] }
 
 ## Serializer
 serde   = { version = "1.0.152", features = ["derive"] }
@@ -34,16 +34,19 @@ uuid7 = { version = "0.3.4", features = ["serde"] }
 
 ## Channel
 kanal = "0.1.0-pre8"
+# ringbuf = "0.3.2"
 
 ## Utils
-color-eyre         = { version = "0.6.2", default-features = false }
-tokio-util         = { version = "0.7.4", features = ["codec"] }
-bytes              = { version = "1.4.0", features = ["serde"] }
-mod_use            = "0.2.1"
-tap                = "1.0.1"
-rand               = "0.8.5"
+color-eyre = { version = "0.6.2", default-features = false }
+tokio-util = { version = "0.7.4", features = ["codec"] }
+bytes      = { version = "1.4.0", features = ["serde"] }
+
 crossbeam-skiplist = "0.1.1"
-thiserror          = "1.0.38"
+mod_use            = "0.2.1"
+rand               = "0.8.5"
+tap                = "1.0.1"
+
+# thiserror          = "1.0.38"
 
 ## CRDT
 [dependencies.crdts]
