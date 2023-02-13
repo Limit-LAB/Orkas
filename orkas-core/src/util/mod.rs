@@ -14,10 +14,7 @@ use futures::{task::AtomicWaker, Future};
 use tokio::time::{error::Elapsed, timeout};
 use uuid7::Uuid;
 
-use crate::{
-    model::{Actor, LogList, LogOp},
-    Event,
-};
+use crate::model::{Actor, LogList, LogOp};
 
 mod_use::mod_use![macros, sorting_channel];
 
@@ -158,18 +155,6 @@ impl GetTime for Uuid {
         let mut bytes = [0; 8];
         bytes[2..].copy_from_slice(&self.as_bytes()[..6]);
         u64::from_be_bytes(bytes)
-    }
-}
-
-impl GetTime for Event {
-    #[inline]
-    fn get_time(&self) -> SystemTime {
-        self.id.get_time()
-    }
-
-    #[inline]
-    fn get_ts(&self) -> u64 {
-        self.id.get_ts()
     }
 }
 
