@@ -1,4 +1,4 @@
-#![doc = include_str!("../README.md")]
+#![doc = include_str!("../../README.md")]
 #![cfg_attr(test, feature(is_sorted))]
 #![feature(type_alias_impl_trait)]
 #![feature(default_free_fn)]

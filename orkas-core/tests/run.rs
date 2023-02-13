@@ -1,6 +1,6 @@
 use std::env;
 
-use orkas::{consts::SECOND, Log, LogList, OrkasConfig};
+use orkas_core::{consts::SECOND, Log, LogList, OrkasConfig};
 use tokio::time::sleep;
 use tracing::info;
 
