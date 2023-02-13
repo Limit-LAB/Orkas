@@ -1,21 +1,22 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(test, feature(is_sorted))]
 #![feature(type_alias_impl_trait)]
-#![feature(once_cell)]
+#![feature(default_free_fn)]
+#![feature(drain_filter)]
 #![feature(try_blocks)]
+#![feature(let_chains)]
+#![feature(once_cell)]
 
 use std::{net::SocketAddr, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
-use foca::BincodeCodec;
-use rand::{rngs::StdRng, thread_rng, SeedableRng};
 use tap::Pipe;
+use tracing::info;
 use uuid7::uuid7;
 
 pub use crate::model::*;
 use crate::{
-    codec::bincode_option,
-    tasks::{spawn_background, spawn_swim, Background, Context, OrkasBroadcastHandler, SWIM},
+    tasks::{spawn_background, Background, Context, Swim},
     util::{CRDTReader, CRDTUpdater},
 };
 
@@ -60,6 +61,27 @@ impl Orkas {
         self.background.addr()
     }
 
+    fn make_swim(&self, topic: String) -> Result<Swim> {
+        Swim::new(self.local_addr(), self.ctx().clone(), topic)
+    }
+
+    async fn connect_to(&self, addr: SocketAddr) -> Result<()> {
+        let ctx = self.ctx();
+
+        let (send, recv) = tokio::net::TcpStream::connect(addr) // TODO: fine tuning connection or just use quinn
+            .await?
+            .into_split()
+            .pipe(adapt);
+
+        info!(%addr, "Connected");
+
+        // Send the streams to the background task
+        ctx.conn_inbound.send(send).await?;
+        ctx.conn_outbound.send((addr, recv)).await?;
+
+        Ok(())
+    }
+
     // TODO: use `ToSocketAddrs` instead of `SocketAddr`.
     // TODO: join with multiple initial nodes
     /// Join a topic cluster with given address and topic name.
@@ -70,22 +92,9 @@ impl Orkas {
         let topic = topic.into();
         let ctx = self.ctx();
 
-        let (send, recv) = tokio::net::TcpStream::connect(addr) // TODO: fine tuning connection or just use quinn
-            .await?
-            .into_split()
-            .pipe(adapt);
+        self.connect_to(addr).await?;
 
-        // Send the streams to the background task
-        ctx.conn_inbound.send(send).await?;
-        ctx.conn_outbound.send((addr, recv)).await?;
-
-        let mut swim = SWIM::with_custom_broadcast(
-            Id::from(self.local_addr()),
-            ctx.config.foca.clone(),
-            StdRng::from_rng(thread_rng())?,
-            BincodeCodec(bincode_option()),
-            OrkasBroadcastHandler::new(&topic, ctx.clone()),
-        );
+        let mut swim = Swim::new(self.local_addr(), ctx.clone(), topic.clone())?;
 
         let mut rt = ctx.swim_runtime(&topic);
 
@@ -93,12 +102,12 @@ impl Orkas {
         swim.announce(addr.into(), &mut rt)?;
 
         // Spawn the SWIM task
-        let swim = spawn_swim(topic.clone(), swim, ctx.clone());
+        let swim = swim.spawn();
         let logs = LogList::new();
         let topic_record = Topic { swim, logs };
 
         // Insert the topic record
-        ctx.topics.insert(topic.clone(), topic_record);
+        ctx.insert_topic(&topic, topic_record);
 
         // Send all messages from swim to outbound
         rt.flush().await?;
@@ -126,21 +135,14 @@ impl Orkas {
         let topic = topic.into();
         let ctx = self.ctx();
 
-        let swim = SWIM::with_custom_broadcast(
-            Id::from(self.local_addr()),
-            ctx.config.foca.clone(),
-            StdRng::from_rng(thread_rng())?,
-            BincodeCodec(bincode_option()),
-            OrkasBroadcastHandler::new(&topic, ctx.clone()),
-        );
-
         // Spawn the task and create local record
-        let swim = spawn_swim(topic.clone(), swim, ctx.clone());
+        let swim = self.make_swim(topic.clone())?.spawn();
+
         let logs = LogList::new();
         let topic_record = Topic { swim, logs };
 
         // Insert the topic record
-        ctx.topics.insert(topic.clone(), topic_record);
+        ctx.insert_topic(topic, topic_record);
 
         Ok(())
     }
@@ -150,9 +152,9 @@ impl Orkas {
         let topic = topic.into();
         let ctx = self.ctx();
 
-        let Some(topic_record) = ctx.topics.remove(&topic) else { return Ok(()) };
+        let Some(topic_record) = ctx.remove_topic(&topic) else { return Ok(()) };
 
-        topic_record.value().swim.stop();
+        topic_record.swim().stop();
 
         Ok(())
     }
@@ -176,9 +178,11 @@ impl Orkas {
 
     /// Read a topic and derive data from it
     pub fn read<F: CRDTReader>(&self, topic: impl AsRef<str>, func: F) -> Option<F::Return> {
-        self.ctx()
-            .topics
-            .get(topic.as_ref())
-            .map(|x| func.read(&x.value().logs))
+        self.ctx().get_topic(topic).map(|x| func.read(&x.crdt()))
+    }
+
+    /// Emit an event and broadcast it
+    pub fn log(&self, topic: impl AsRef<str>, log: Log) -> Result<()> {
+        self.ctx().log(topic, log)
     }
 }

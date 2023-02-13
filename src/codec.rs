@@ -1,7 +1,6 @@
 /// A framed codec that uses bincode to serialize and deserialize messages.
 use std::{any::type_name, fmt::Debug, io::Cursor};
 
-use bincode::serialized_size;
 use bytes::{Buf, BufMut, BytesMut};
 use color_eyre::{eyre::Context, Result};
 use futures::{Sink, Stream};
@@ -161,19 +160,17 @@ pub fn try_decode<T: DeserializeOwned + Debug>(
     match res {
         Ok(val) => {
             data.advance(cur.position() as usize);
+
             trace!(?val, "Decoded");
 
             Ok(Some(val))
         }
-        // Buffer is not filled (yet), not an error. Leave the cursor untouched so that
-        // remaining bytes can be used in the next decode attempt.
+
         Err(e) => match *e {
             // Buffer is not filled (yet), not an error. Leave the cursor untouched so that
             // remaining bytes can be used in the next decode attempt.
-            bincode::ErrorKind::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Ok(None);
-            }
-            _ => Err(e.into()),
+            bincode::ErrorKind::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
+            _ => Err(e),
         },
     }
 }
@@ -203,7 +200,7 @@ fn test_codec() {
     let mut w = BytesMut::new();
 
     info!("Encoding");
-    enc.encode(a.clone(), &mut w).unwrap();
+    enc.encode(a, &mut w).unwrap();
 
     info!("{:#?}", &w[..]);
     info!("Decoding");
@@ -284,5 +281,5 @@ fn test_bincode_ser() {
     let b = bincode_option().serialize(&a).unwrap();
 
     println!("Len {}", b.len());
-    println!("{:?}", b);
+    println!("{b:?}");
 }

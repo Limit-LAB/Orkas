@@ -6,21 +6,20 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use color_eyre::Result;
 use futures::{task::AtomicWaker, Future};
-use tokio::{
-    task::JoinHandle,
-    time::{error::Elapsed, timeout},
+use tokio::time::{error::Elapsed, timeout};
+use uuid7::Uuid;
+
+use crate::{
+    model::{Actor, LogList, LogOp},
+    Event,
 };
-use tokio_util::sync::CancellationToken;
-use tracing::warn;
 
-use crate::model::{Actor, LogList, LogOp};
-
-mod_use::mod_use![macros];
+mod_use::mod_use![macros, sorting_channel];
 
 struct FlagInner {
     waker: AtomicWaker,
@@ -85,27 +84,6 @@ impl Future for Flag {
     }
 }
 
-pub fn cancellable_spawn<F, Arg, Fut>(
-    token: &CancellationToken,
-    captures: Arg,
-    func: F,
-) -> JoinHandle<()>
-where
-    F: FnOnce(CancellationToken, Arg::Owned) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<()>> + Send + Sync + 'static,
-    Arg: CloneableTuple,
-    Arg::Owned: Send + Sync + 'static,
-{
-    let token = token.clone();
-    let arg = captures.clone_me();
-    tokio::spawn(async move {
-        if let Err(e) = func(token.clone(), arg).await {
-            warn!("{e}");
-            token.cancel();
-        }
-    })
-}
-
 pub trait CloneableTuple {
     type Owned;
 
@@ -159,4 +137,50 @@ where
     fn read(self, op: &LogList) -> T {
         self(op)
     }
+}
+
+pub trait GetTime {
+    /// Retrive the time of the object
+    fn get_time(&self) -> SystemTime;
+
+    /// Retrive the timestamp of the object
+    fn get_ts(&self) -> u64;
+}
+
+impl GetTime for Uuid {
+    #[inline]
+    fn get_time(&self) -> SystemTime {
+        UNIX_EPOCH + Duration::from_millis(self.get_ts())
+    }
+
+    #[inline]
+    fn get_ts(&self) -> u64 {
+        let mut bytes = [0; 8];
+        bytes[2..].copy_from_slice(&self.as_bytes()[..6]);
+        u64::from_be_bytes(bytes)
+    }
+}
+
+impl GetTime for Event {
+    #[inline]
+    fn get_time(&self) -> SystemTime {
+        self.id.get_time()
+    }
+
+    #[inline]
+    fn get_ts(&self) -> u64 {
+        self.id.get_ts()
+    }
+}
+
+#[test]
+fn test_uuid() {
+    use uuid7::uuid7;
+
+    let time = uuid7().get_time();
+
+    let diff = SystemTime::now().duration_since(time).unwrap();
+
+    // Process should be fast enough to not take more than 1ms
+    assert_eq!(diff.as_millis(), 0);
 }

@@ -1,10 +1,10 @@
-mod_use::mod_use![conn, swim];
+mod_use::mod_use![conn, swim, event];
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
 use crdts::SyncedCmRDT;
-use crossbeam_skiplist::{SkipMap, SkipSet};
+use crossbeam_skiplist::{map::Entry, SkipMap};
 use futures::future::join_all;
 use tap::{Pipe, Tap};
 use tokio::{
@@ -14,15 +14,15 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{debug, info, warn};
-use uuid7::Uuid;
 
 use crate::{
     codec::{MessageSink, MessageStream},
+    consts::DEFAULT_CHANNEL_SIZE,
     model::{Actor, Envelope, State, Topic},
     util::{CRDTUpdater, Flag},
-    Broadcast, OrkasConfig,
+    Broadcast, Event, Log, LogList, OrkasConfig,
 };
 
 type Inbound = MessageStream<OwnedReadHalf>;
@@ -38,16 +38,18 @@ pub struct Context {
     pub msg: kanal::AsyncSender<Envelope>,
     pub conn_inbound: kanal::AsyncSender<Inbound>,
     pub conn_outbound: kanal::AsyncSender<(SocketAddr, Outbound)>,
-    pub topics: Arc<SkipMap<String, Topic>>,
     pub waiters: Arc<SkipMap<SocketAddr, Flag>>,
     pub config: Arc<OrkasConfig>,
-    seen: Arc<SkipSet<Uuid>>,
+    topics: Arc<SkipMap<String, Topic>>,
     actor: Actor,
-
     cancel_token: CancellationToken,
 }
 
 impl Context {
+    pub fn cancelled(&self) -> WaitForCancellationFuture<'_> {
+        self.cancel_token.cancelled()
+    }
+
     pub fn close_all(&self) {
         self.cancel_token.cancel();
         self.topics.iter().for_each(|t| t.value().swim.stop());
@@ -56,18 +58,17 @@ impl Context {
         self.conn_outbound.close();
     }
 
-    /// Test if a broadcast is seen.
-    pub fn seen(&self, id: &Uuid) -> bool {
-        self.seen.contains(id)
-    }
-
-    /// Mark broadcast as seen.
-    pub fn saw(&self, id: Uuid) {
-        self.seen.insert(id);
-    }
-
     pub fn state(&self) -> State {
         todo!()
+    }
+
+    pub fn log(&self, topic: impl AsRef<str>, log: Log) -> Result<()> {
+        let topic = topic.as_ref();
+        let Some(t) = self.topics.get(topic) else { bail!("Topic does not exist") };
+
+        t.value().swim.send_event(Event::new(log))?;
+
+        Ok(())
     }
 
     pub async fn update<F>(&self, topic: impl AsRef<str>, updater: F) -> Result<bool>
@@ -80,26 +81,59 @@ impl Context {
         let logs = &t.value().logs;
         let Some(op) = updater.update(logs, self.actor)? else { return Ok(false) };
         logs.synced_apply(op.clone());
-
         debug!(?op, topic, "update sent");
 
         t.value()
             .swim
-            .send_internal(Broadcast::new_crdt(op).pack()?.serialize()?)
+            .send_internal(Broadcast::new_crdt(op))
             .await?;
 
         Ok(true)
+    }
+
+    pub fn get_topic(&self, topic: impl AsRef<str>) -> Option<TopicEntry<'_>> {
+        self.topics.get(topic.as_ref()).map(TopicEntry::new)
+    }
+
+    pub fn insert_topic(&self, name: impl Into<String>, topic: Topic) -> TopicEntry<'_> {
+        self.topics.insert(name.into(), topic).pipe(TopicEntry::new)
+    }
+
+    pub fn remove_topic(&self, topic: impl AsRef<str>) -> Option<TopicEntry<'_>> {
+        self.topics.remove(topic.as_ref()).map(TopicEntry::new)
     }
 
     /// Wait for node with corresponding address to join or rejoin.
     pub async fn wait_for(&self, addr: SocketAddr, dur: Duration) -> bool {
         let f = self
             .waiters
-            .get_or_insert_with(addr, || Flag::new())
+            .get_or_insert_with(addr, Flag::new)
             .value()
             .clone();
 
         f.timeout(dur).await.is_ok()
+    }
+}
+
+pub struct TopicEntry<'a> {
+    entry: Entry<'a, String, Topic>,
+}
+
+impl<'a> TopicEntry<'a> {
+    fn new(entry: Entry<'a, String, Topic>) -> Self {
+        Self { entry }
+    }
+
+    pub fn crdt(&self) -> &LogList {
+        &self.entry.value().logs
+    }
+
+    pub fn swim(&self) -> &SwimJobHandle {
+        &self.entry.value().swim
+    }
+
+    pub fn name(&self) -> &str {
+        self.entry.key()
     }
 }
 
@@ -111,12 +145,10 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
     let cancel_token = CancellationToken::new();
     let topics = SkipMap::new().pipe(Arc::new);
     let waiters = SkipMap::new().pipe(Arc::new);
-    let seen = SkipSet::new().pipe(Arc::new);
 
     let ctx = Context {
         actor: Actor::random(),
         msg,
-        seen,
         conn_inbound,
         conn_outbound,
         topics,

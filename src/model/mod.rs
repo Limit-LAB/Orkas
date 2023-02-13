@@ -4,7 +4,7 @@ use crdts::SList;
 
 use crate::tasks::SwimJobHandle;
 
-mod_use::mod_use![config, message, event,];
+mod_use::mod_use![config, message, msg_impl, event,];
 
 use std::{
     fmt::Display,
@@ -147,6 +147,20 @@ impl Log {
 
     pub fn ts(&self) -> Timestamp {
         self.ts
+    }
+
+    #[cfg(test)]
+    pub fn random() -> Self {
+        use rand::{distributions::Alphanumeric, thread_rng, Rng};
+
+        Self {
+            message: thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(thread_rng().gen_range(5..15))
+                .map(char::from)
+                .collect(),
+            ts: Timestamp::now(),
+        }
     }
 }
 

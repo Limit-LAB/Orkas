@@ -34,13 +34,14 @@ mod impls {
     impl_cloneable!(T1 = 0, T2 = 1, T3 = 2, T4 = 3, T5 = 4, T6 = 5, T7 = 6, T8 = 7, T9 = 8, T10 = 9, T11 = 10, T12 = 11, T13 = 12, T14 = 13, T15 = 14);
 }
 
+/// Errors that will stop the loop
 macro_rules! ok_or_break {
     ($target:literal, $e:expr) => {{
         match $e {
             Ok(x) => x,
             Err(e) => {
                 tracing::error!(target: $target, "{e}");
-                break;
+                break Err(e.into());
             }
         }
     }};
@@ -49,7 +50,7 @@ macro_rules! ok_or_break {
             Ok(x) => x,
             Err(e) => {
                 tracing::error!(target: $target, error = ?e, $($arg)*);
-                break;
+                break Err(e.into());
             }
         }
     }};

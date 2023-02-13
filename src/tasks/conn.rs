@@ -27,13 +27,12 @@ use uuid7::uuid7;
 
 use crate::{
     codec::adapt,
+    consts::DEFAULT_CHANNEL_SIZE,
     model::{Envelope, Topic},
     tasks::{Context, Inbound, Outbound},
     util::ok_or_continue,
     Message,
 };
-
-pub const DEFAULT_CHANNEL_SIZE: usize = 1 << 4;
 
 /// Aggregate all inbound data and dispatch them to corresponding handler.
 pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: Context) -> Result<()> {
@@ -120,7 +119,7 @@ pub(super) async fn outbound_task(
     ctx: Context,
 ) -> Result<()> {
     // TODO: maybe change this to LRU?
-    let mut map = HashMap::with_capacity(1 << 4);
+    let mut map = HashMap::with_capacity(DEFAULT_CHANNEL_SIZE);
 
     loop {
         if ctx.cancel_token.is_cancelled() {
