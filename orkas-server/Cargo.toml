@@ -1,0 +1,17 @@
+[package]
+name    = "orkas-server"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+## Orkas
+orkas-core = { version = "0.1.0", path = "../orkas-core" }
+
+## Server
+axum = { version = "0.6.6", features = ["headers", "macros", "tower-log", "ws"] }
+
+## Runtime
+tokio = "1.25.0"
