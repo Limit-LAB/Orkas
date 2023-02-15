@@ -18,15 +18,15 @@ use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{debug, info, warn};
 
 use crate::{
-    codec::{MessageSink, MessageStream},
+    codec::{EnvelopeSink, EnvelopeStream},
     consts::DEFAULT_CHANNEL_SIZE,
     model::{Actor, Envelope, State, Topic},
     util::{CRDTReader, CRDTUpdater, Flag},
     Event, Log, LogList, OrkasConfig,
 };
 
-type Inbound = MessageStream<OwnedReadHalf>;
-type Outbound = MessageSink<OwnedWriteHalf>;
+type Inbound = EnvelopeStream<OwnedReadHalf>;
+type Outbound = EnvelopeSink<OwnedWriteHalf>;
 
 /// Context of Orkas.
 ///

@@ -1,6 +1,7 @@
 /// A framed codec that uses bincode to serialize and deserialize messages.
 use std::{any::type_name, fmt::Debug, io::Cursor};
 
+use bincode::Options;
 use bytes::{Buf, BufMut, BytesMut};
 use color_eyre::{eyre::Context, Result};
 use futures::{Sink, Stream};
@@ -11,26 +12,31 @@ use tracing::{instrument, trace, warn};
 
 use crate::Envelope;
 
-pub type MessageStream<R: AsyncRead> = impl Stream<Item = Result<Envelope>>;
-pub type MessageSink<W: AsyncWrite> = impl Sink<Envelope, Error = color_eyre::eyre::Error>;
+pub type EnvelopeStream<R: AsyncRead> = impl Stream<Item = Result<Envelope>>;
+pub type EnvelopeSink<W: AsyncWrite> = impl Sink<Envelope, Error = color_eyre::eyre::Error>;
+
+pub type EnvelopeStreamWithOption<R: AsyncRead, O: Options + Copy> =
+    impl Stream<Item = Result<Envelope>>;
+pub type EnvelopeSinkWithOption<W: AsyncWrite, O: Options + Copy> =
+    impl Sink<Envelope, Error = color_eyre::eyre::Error>;
 
 pub use bincode_option_mod::{bincode_option, BincodeOptions};
 
 /// Workaround for rust resolving `BincodeOptions` to two different types
 mod bincode_option_mod {
-    use bincode::Options;
+    use bincode::{DefaultOptions, Options};
 
     pub type BincodeOptions = impl Options + Copy;
 
     #[inline(always)]
     pub fn bincode_option() -> BincodeOptions {
-        bincode::DefaultOptions::new()
+        DefaultOptions::new()
             .reject_trailing_bytes()
             .with_limit(1 << 12)
     }
 }
 
-pub fn adapt<R, W>(stream: (R, W)) -> (MessageStream<R>, MessageSink<W>)
+pub fn adapt<R, W>(stream: (R, W)) -> (EnvelopeStream<R>, EnvelopeSink<W>)
 where
     R: AsyncRead,
     W: AsyncWrite,
@@ -42,21 +48,17 @@ where
     (stream, sink)
 }
 
-pub fn adapt_with_option<R, W, T, O>(
+pub fn adapt_with_option<R, W, O>(
     stream: (R, W),
     option: O,
-) -> (
-    impl Stream<Item = Result<T>>,
-    impl Sink<T, Error = color_eyre::eyre::Error>,
-)
+) -> (EnvelopeStreamWithOption<R, O>, EnvelopeSinkWithOption<W, O>)
 where
     R: AsyncRead,
     W: AsyncWrite,
-    T: Serialize + DeserializeOwned + Debug,
-    O: bincode::Options + Clone,
+    O: Options + Copy,
 {
     let (r, w) = stream;
-    let codec = SerdeBincodeCodec::<T, O>::with_option(option);
+    let codec = SerdeBincodeCodec::with_option(option);
     let stream = FramedRead::new(r, codec.clone());
     let sink = FramedWrite::new(w, codec);
     (stream, sink)
@@ -87,10 +89,7 @@ impl<T, O> Copy for SerdeBincodeCodec<T, O> where O: Copy {}
 
 impl<T> SerdeBincodeCodec<T, BincodeOptions> {
     pub fn new() -> Self {
-        Self {
-            option: bincode_option(),
-            _marker: std::marker::PhantomData,
-        }
+        Self::with_option(bincode_option())
     }
 }
 
@@ -109,7 +108,7 @@ impl<T> Default for SerdeBincodeCodec<T, BincodeOptions> {
     }
 }
 
-impl<T: Serialize, O: bincode::Options + Clone> Encoder<T> for SerdeBincodeCodec<T, O> {
+impl<T: Serialize, O: Options + Clone> Encoder<T> for SerdeBincodeCodec<T, O> {
     type Error = color_eyre::eyre::Error;
 
     fn encode(&mut self, item: T, dst: &mut BytesMut) -> std::result::Result<(), Self::Error> {
@@ -125,7 +124,7 @@ impl<T: Serialize, O: bincode::Options + Clone> Encoder<T> for SerdeBincodeCodec
     }
 }
 
-impl<T: DeserializeOwned + Debug, O: bincode::Options + Clone> Decoder for SerdeBincodeCodec<T, O> {
+impl<T: DeserializeOwned + Debug, O: Options + Clone> Decoder for SerdeBincodeCodec<T, O> {
     type Error = color_eyre::eyre::Error;
     type Item = T;
 
@@ -146,7 +145,7 @@ impl<T: DeserializeOwned + Debug, O: bincode::Options + Clone> Decoder for Serde
 #[instrument(level = "trace", skip(data, option), fields(bytes = data.chunk().len()))]
 pub fn try_decode<T: DeserializeOwned + Debug>(
     data: &mut impl Buf,
-    option: impl bincode::Options,
+    option: impl Options,
 ) -> Result<Option<T>, bincode::Error> {
     if data.chunk().is_empty() {
         return Ok(None);
@@ -256,8 +255,8 @@ async fn test_framed() -> Result<()> {
 
 #[test]
 fn test_bincode_ser() {
-    use bincode::Options;
     use uuid7::Uuid;
+    use Options;
 
     #[derive(Debug, Serialize, PartialEq, Eq, Clone)]
     struct Meta {
