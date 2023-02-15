@@ -75,7 +75,7 @@ impl Swim {
         let (external_tx, external_rx) = kanal::bounded_async::<Bytes>(DEFAULT_CHANNEL_SIZE);
 
         let token = ctx.cancel_token.child_token();
-        let cancel_token = token.child_token();
+        let cancel_token = token.clone();
 
         let event_aggregator = tokio::spawn(event_aggregator(
             ctx.config.clone(),

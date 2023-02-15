@@ -9,11 +9,7 @@ description = "Decentralized MQ implementation with SWIM and CRDT"
 [dependencies]
 
 ## Networking
-quinn = "0.9.3"
-
-## Certification and security
-rcgen  = "0.10.0"
-rustls = "0.20.8"
+s2n-quic = "1.16.0"
 
 ## Membership
 foca = { version = "0.10.0", features = ["serde", "bincode-codec", "tracing"] }
@@ -59,6 +55,7 @@ features = ["sync"]
 ## Time format
 humantime = "2.1.0"
 itertools = "0.10.5"
+rcgen     = "0.10.0"
 
 ## Logger
 tracing-subscriber = "0.3.16"

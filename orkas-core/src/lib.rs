@@ -20,8 +20,9 @@ use crate::{
     util::{CRDTReader, CRDTUpdater},
 };
 
-mod codec;
 pub mod consts;
+
+mod codec;
 mod model;
 mod tasks;
 mod util;
@@ -221,5 +222,9 @@ impl Handle {
             .await?;
 
         Ok(())
+    }
+
+    pub fn subscribe(&self, _topic: impl AsRef<str>) -> Result<()> {
+        todo!("Subscribe to a topic")
     }
 }
