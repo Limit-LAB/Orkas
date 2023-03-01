@@ -44,6 +44,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224afbd727c3d6e4b90103ece64b8d1b67fbb1973b1046c2281eed3f3803f800"
 
 [[package]]
+name = "arc-swap"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bddcadddf5e9015d310179a59bb28c4d4b9920ad0f11e8e14dbadf654890c9a6"
+
+[[package]]
 name = "async-trait"
 version = "0.1.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -379,6 +385,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "event-listener"
+version = "2.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
+
+[[package]]
 name = "eyre"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -415,6 +427,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9c384f161156f5260c24a097c56119f9be8c798586aecc13afbcbe7b7e26bf8"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -746,6 +768,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "348108ab3fba42ec82ff6e9564fc4ca0247bdccdc68dd8af9764bbc79c3c8ffb"
 
 [[package]]
+name = "limlog"
+version = "0.3.0"
+source = "git+https://github.com/Limit-LAB/limlog#e7a9b59a43e050ea25c1bac1cde26418262d4221"
+dependencies = [
+ "arc-swap",
+ "bincode",
+ "event-listener",
+ "fs2",
+ "futures-core",
+ "kanal",
+ "memmap2",
+ "mod_use",
+ "pin-project-lite",
+ "serde",
+ "smallvec",
+ "tap",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid7 0.4.0",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -775,6 +820,15 @@ name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
+
+[[package]]
+name = "memmap2"
+version = "0.5.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83faa42c0a078c393f6b29d5db232d8be22776a891f8f56e5284faee4a20b327"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "memoffset"
@@ -972,6 +1026,7 @@ dependencies = [
  "humantime",
  "itertools",
  "kanal",
+ "limlog",
  "mod_use",
  "rand 0.8.5",
  "rcgen",
@@ -982,7 +1037,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "uuid7",
+ "uuid7 0.3.5",
 ]
 
 [[package]]
@@ -1900,6 +1955,17 @@ name = "uuid7"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83b5d002801870acd99df5c701e289a2ecf985b04e8d6ae2526318622d0c9a7d"
+dependencies = [
+ "fstr",
+ "rand 0.8.5",
+ "serde",
+]
+
+[[package]]
+name = "uuid7"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66f4b856277a2aa87a3fab983e617ebcd889f2d4e7022c7b0a7e20aba0fda097"
 dependencies = [
  "fstr",
  "rand 0.8.5",
