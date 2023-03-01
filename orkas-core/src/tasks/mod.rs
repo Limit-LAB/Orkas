@@ -1,6 +1,6 @@
 mod_use::mod_use![conn, swim, event];
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, ops::Deref, sync::Arc, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
 use crdts::SyncedCmRDT;
@@ -34,18 +34,39 @@ type Outbound = EnvelopeSink<OwnedWriteHalf>;
 /// all fields are behind reference count thus all instances targets to the same
 /// objects.
 #[derive(Clone, Debug)]
+pub struct ContextRef {
+    inner: Arc<Context>,
+}
+
+impl Deref for ContextRef {
+    type Target = Context;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+#[derive(Debug)]
 pub struct Context {
     pub msg: kanal::AsyncSender<Envelope>,
     pub conn_inbound: kanal::AsyncSender<Inbound>,
     pub conn_outbound: kanal::AsyncSender<(SocketAddr, Outbound)>,
-    pub waiters: Arc<SkipMap<SocketAddr, Flag>>,
+    pub waiters: SkipMap<SocketAddr, Flag>,
     pub config: Arc<OrkasConfig>,
-    topics: Arc<SkipMap<String, Topic>>,
+    topics: SkipMap<String, Topic>,
     actor: Actor,
     cancel_token: CancellationToken,
 }
 
 impl Context {
+    pub fn into_ref(self) -> ContextRef {
+        ContextRef {
+            inner: Arc::new(self),
+        }
+    }
+}
+
+impl ContextRef {
     pub fn cancelled(&self) -> WaitForCancellationFuture<'_> {
         self.cancel_token.cancelled()
     }
@@ -153,8 +174,8 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
     let (msg, msg_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
 
     let cancel_token = CancellationToken::new();
-    let topics = SkipMap::new().pipe(Arc::new);
-    let waiters = SkipMap::new().pipe(Arc::new);
+    let topics = SkipMap::new();
+    let waiters = SkipMap::new();
 
     let ctx = Context {
         actor: Actor::random(),
@@ -165,7 +186,8 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
         waiters,
         config,
         cancel_token,
-    };
+    }
+    .into_ref();
 
     let listener = TcpListener::bind(ctx.config.bind).await?;
     let addr = listener.local_addr()?.tap(|addr| {
@@ -190,7 +212,7 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
 
 // TODO: enum Status { Starting, Running, Stopped }
 pub struct Background {
-    ctx: Context,
+    ctx: ContextRef,
     addr: SocketAddr,
     handles: Vec<JoinHandle<Result<()>>>,
     stopped: bool,
@@ -214,7 +236,7 @@ impl Background {
     }
 
     /// Get the context of the background tasks.
-    pub fn ctx(&self) -> &Context {
+    pub fn ctx(&self) -> &ContextRef {
         &self.ctx
     }
 

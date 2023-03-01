@@ -29,13 +29,13 @@ use crate::{
     codec::adapt,
     consts::DEFAULT_CHANNEL_SIZE,
     model::{Envelope, Topic},
-    tasks::{Context, Inbound, Outbound},
+    tasks::{ContextRef, Inbound, Outbound},
     util::ok_or_continue,
     Message,
 };
 
 /// Aggregate all inbound data and dispatch them to corresponding handler.
-pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: Context) -> Result<()> {
+pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: ContextRef) -> Result<()> {
     let mut streams = SelectAll::<Inbound>::new();
     loop {
         if ctx.cancel_token.is_cancelled() {
@@ -116,7 +116,7 @@ pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: Context) -> 
 pub(super) async fn outbound_task(
     msg_recv: AsyncReceiver<Envelope>,
     conn_recv: AsyncReceiver<(SocketAddr, Outbound)>,
-    ctx: Context,
+    ctx: ContextRef,
 ) -> Result<()> {
     // TODO: maybe change this to LRU?
     let mut map = HashMap::with_capacity(DEFAULT_CHANNEL_SIZE);
@@ -173,7 +173,7 @@ pub(super) async fn outbound_task(
 }
 
 /// Accept income connections and send them to the inbound and outbound task
-pub(super) async fn listener_task(listener: TcpListener, ctx: Context) -> Result<()> {
+pub(super) async fn listener_task(listener: TcpListener, ctx: ContextRef) -> Result<()> {
     loop {
         let (stream, src) =
             match select(pin!(ctx.cancel_token.cancelled()), pin!(listener.accept())).await {

@@ -24,7 +24,9 @@ use crate::{
     codec::{bincode_option, BincodeOptions},
     consts::{DEFAULT_BUFFER_SIZE, DEFAULT_CHANNEL_SIZE},
     model::Id,
-    tasks::{event_aggregator, make_event_channel, Context, EventConsumer, EventProducer},
+    tasks::{
+        event_aggregator, make_event_channel, Context, ContextRef, EventConsumer, EventProducer,
+    },
     util::{ok_or_break, ok_or_continue, ok_or_warn},
     Broadcast, BroadcastPack, BroadcastTag, Envelope, Event, InternalMessage, Message,
 };
@@ -36,14 +38,14 @@ pub type SWIM = Foca<Id, BincodeCodec<BincodeOptions>, StdRng, BroadcastHandler>
 /// create a long-living task.
 #[derive(Debug)]
 pub(crate) struct Swim {
-    ctx: Context,
+    ctx: ContextRef,
     swim: SWIM,
     topic: String,
     chan: (EventProducer, EventConsumer),
 }
 
 impl Swim {
-    pub fn new(local_addr: SocketAddr, ctx: Context, topic: String) -> Result<Self> {
+    pub fn new(local_addr: SocketAddr, ctx: ContextRef, topic: String) -> Result<Self> {
         let (event, event_rx) = make_event_channel(DEFAULT_CHANNEL_SIZE);
 
         let swim = SWIM::with_custom_broadcast(

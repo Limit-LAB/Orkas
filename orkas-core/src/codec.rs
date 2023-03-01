@@ -59,7 +59,7 @@ where
 {
     let (r, w) = stream;
     let codec = SerdeBincodeCodec::with_option(option);
-    let stream = FramedRead::new(r, codec.clone());
+    let stream = FramedRead::new(r, codec);
     let sink = FramedWrite::new(w, codec);
     (stream, sink)
 }

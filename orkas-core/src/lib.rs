@@ -16,7 +16,7 @@ use uuid7::uuid7;
 
 pub use crate::model::*;
 use crate::{
-    tasks::{spawn_background, Background, Context, Swim, TopicEntry},
+    tasks::{spawn_background, Background, ContextRef, Swim, TopicEntry},
     util::{CRDTReader, CRDTUpdater},
 };
 
@@ -51,7 +51,7 @@ impl Orkas {
     }
 
     #[inline]
-    pub(crate) fn ctx(&self) -> &Context {
+    pub(crate) fn ctx(&self) -> &ContextRef {
         self.background.ctx()
     }
 
@@ -89,7 +89,7 @@ impl Orkas {
 /// [`Orkas`] struct.
 #[derive(Clone, Debug)]
 pub struct Handle {
-    ctx: Context,
+    ctx: ContextRef,
     addr: SocketAddr,
 }
 
@@ -134,7 +134,7 @@ impl Handle {
     /// Read a topic and derive data from it
     #[inline]
     pub fn read<F: CRDTReader>(&self, topic: impl AsRef<str>, func: F) -> Option<F::Return> {
-        self.ctx.get_topic(topic).map(|x| func.read(&x.crdt()))
+        self.ctx.get_topic(topic).map(|x| func.read(x.crdt()))
     }
 
     /// Emit an event and broadcast it
