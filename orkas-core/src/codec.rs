@@ -31,7 +31,8 @@ mod bincode_option_mod {
     #[inline(always)]
     pub fn bincode_option() -> BincodeOptions {
         DefaultOptions::new()
-            .reject_trailing_bytes()
+            .with_fixint_encoding()
+            .with_little_endian()
             .with_limit(1 << 12)
     }
 }
