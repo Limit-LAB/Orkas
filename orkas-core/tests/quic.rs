@@ -3,6 +3,7 @@ use futures::{AsyncWriteExt, StreamExt};
 use orkas_core::consts::SECOND;
 use s2n_quic::{client::Connect, provider::tls, stream::BidirectionalStream, Client, Server};
 use tap::Pipe;
+use tokio::{select, time::sleep};
 use tracing::info;
 
 const SERVERNAME: &str = "localhost";
@@ -32,7 +33,12 @@ fn tls() -> Result<(tls::default::Server, tls::default::Client)> {
 async fn test_quic() {
     tracing_subscriber::fmt().init();
 
-    inner().await.unwrap();
+    select! {
+        res = inner() => res.unwrap(),
+        _ = sleep(25 * SECOND) => {
+            panic!("test quic timeout")
+        }
+    }
 }
 
 async fn inner() -> Result<()> {
@@ -80,9 +86,11 @@ async fn inner() -> Result<()> {
 
     info!("opened");
 
-    loop {
+    for _ in 0..20 {
         let num = rand::random::<u64>().to_string().into_bytes();
         bi.write_all(&num).await?;
         tokio::time::sleep(SECOND).await;
     }
+
+    Ok(())
 }
