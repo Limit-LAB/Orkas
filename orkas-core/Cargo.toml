@@ -7,9 +7,9 @@ license     = "Apache"
 description = "Decentralized MQ implementation with SWIM and CRDT"
 
 [dependencies]
-
 ## Networking
-s2n-quic = "1.16.0"
+# Readd after https://github.com/RustCrypto/utils/issues/878#issuecomment-1488918669 is solved
+# s2n-quic = "1"
 
 ## Membership
 foca = { version = "0.10.0", features = ["serde", "bincode-codec", "tracing"] }
