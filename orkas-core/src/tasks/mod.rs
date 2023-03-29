@@ -110,15 +110,25 @@ impl ContextRef {
     }
 
     pub fn get_topic(&self, topic: impl AsRef<str>) -> Option<TopicEntry<'_>> {
-        self.topics.get(topic.as_ref()).map(TopicEntry::new)
+        self.topics
+            .get(topic.as_ref())
+            .map(TopicEntry::prepare(self))
     }
 
-    pub fn insert_topic(&self, name: impl Into<String>, topic: Topic) -> TopicEntry<'_> {
-        self.topics.insert(name.into(), topic).pipe(TopicEntry::new)
+    pub fn has_topic(&self, topic: impl AsRef<str>) -> bool {
+        self.topics.contains_key(topic.as_ref())
     }
 
-    pub fn remove_topic(&self, topic: impl AsRef<str>) -> Option<TopicEntry<'_>> {
-        self.topics.remove(topic.as_ref()).map(TopicEntry::new)
+    pub(crate) fn insert_topic(&self, name: impl Into<String>, topic: Topic) -> TopicEntry<'_> {
+        self.topics
+            .insert(name.into(), topic)
+            .pipe(TopicEntry::prepare(self))
+    }
+
+    pub(crate) fn remove_topic(&self, topic: impl AsRef<str>) -> Option<TopicEntry<'_>> {
+        self.topics
+            .remove(topic.as_ref())
+            .map(TopicEntry::prepare(self))
     }
 
     /// Wait for node with corresponding address to join or rejoin.
@@ -135,11 +145,12 @@ impl ContextRef {
 
 pub struct TopicEntry<'a> {
     entry: Entry<'a, String, Topic>,
+    ctx: &'a ContextRef,
 }
 
 impl<'a> TopicEntry<'a> {
-    fn new(entry: Entry<'a, String, Topic>) -> Self {
-        Self { entry }
+    fn prepare(ctx: &'a ContextRef) -> impl FnOnce(Entry<'a, String, Topic>) -> Self {
+        move |entry| Self { entry, ctx }
     }
 
     /// Get the CRDT struct.
@@ -165,6 +176,21 @@ impl<'a> TopicEntry<'a> {
     /// Get the topic name.
     pub fn name(&self) -> &str {
         self.entry.key()
+    }
+
+    /// Get the context.
+    pub fn ctx(&self) -> &ContextRef {
+        self.ctx
+    }
+
+    /// A stream of all the logs.
+    pub fn subscribe(&self) -> limlog::Reader {
+        self.entry.value().map.reader()
+    }
+
+    /// A sink to write logs to.
+    pub fn writer(&self) -> limlog::Writer {
+        self.entry.value().map.writer()
     }
 }
 

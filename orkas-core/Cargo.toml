@@ -18,9 +18,6 @@ foca = { version = "0.10.0", features = ["serde", "bincode-codec", "tracing"] }
 tokio   = { version = "1.25.0", features = ["net", "macros"] }
 futures = { version = "0.3.26", default-features = false, features = ["alloc"] }
 
-## Persistent
-limlog = { git = "https://github.com/Limit-LAB/limlog", version = "0.3.0" }
-
 ## Serializer
 serde   = { version = "1.0.152", features = ["derive"] }
 bincode = "1.3.3"
@@ -53,6 +50,12 @@ version  = "7.2.0"
 git      = "https://github.com/Limit-Lab/rust-crdt"
 rev      = "08e12588c730ed9ee660fb074867a0cc43de9acf"
 features = ["sync"]
+
+## Persistent
+[dependencies.limlog]
+version = "0.3.0"
+git     = "https://github.com/Limit-LAB/limlog"
+rev     = "17e0433cd3a5ba8dc4d69b4082f259c7cc1519cf"
 
 [dev-dependencies]
 ## Time format

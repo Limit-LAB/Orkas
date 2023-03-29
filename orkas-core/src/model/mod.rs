@@ -1,6 +1,7 @@
 //! Models include data wrapper and type aliases used in the project.
 
 use crdts::SList;
+use limlog::{Reader, Writer};
 
 use crate::tasks::SwimJobHandle;
 
@@ -182,10 +183,21 @@ pub struct ChannelState {}
 /// Represent a single topic which is then being stored in the global topics
 /// map, and can be updated separately and synced throughout a single topic
 /// cluster.
-#[derive(Debug, Clone)]
-pub struct Topic {
-    pub(crate) logs: LogList,
-    pub(crate) swim: SwimJobHandle,
+#[derive(Debug)]
+pub(crate) struct Topic {
+    pub logs: LogList,
+    pub swim: SwimJobHandle,
+    pub map: limlog::Topic,
+}
+
+impl Topic {
+    pub fn reader(&self) -> Reader {
+        self.map.reader()
+    }
+
+    pub fn writer(&self) -> Writer {
+        self.map.writer()
+    }
 }
 
 pub type LogList = SList<Log, Actor>;

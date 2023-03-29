@@ -15,3 +15,6 @@ axum = { version = "0.6.6", features = ["headers", "macros", "tower-log", "ws"] 
 
 ## Runtime
 tokio = "1.25.0"
+
+## Error handling
+color-eyre = { version = "0.6.2", default-features = false }

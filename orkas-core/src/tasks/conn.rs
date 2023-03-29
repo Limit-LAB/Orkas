@@ -28,7 +28,7 @@ use uuid7::uuid7;
 use crate::{
     codec::adapt,
     consts::DEFAULT_CHANNEL_SIZE,
-    model::{Envelope, Topic},
+    model::Envelope,
     tasks::{ContextRef, Inbound, Outbound},
     util::ok_or_continue,
     Message,
@@ -88,15 +88,17 @@ pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: ContextRef) 
                             .await;
                         ok_or_continue!("inbound", res)
                     }
-                    Message::Snapshot { snapshot } => {
+                    Message::Snapshot { .. } => {
                         trace!(target: "inbound", message_type = "snapshot", "Received snapshot");
 
-                        let swim = handle.value().swim.clone();
-                        let new_topic = Topic {
-                            logs: snapshot,
-                            swim,
-                        };
-                        ctx.topics.insert(topic, new_topic);
+                        todo!();
+                        // let swim = handle.value().swim.clone();
+                        // let new_topic = Topic {
+                        //     logs: snapshot,
+                        //     map: handle.value().map.clone(),
+                        //     swim,
+                        // };
+                        // ctx.topics.insert(topic, new_topic);
                     }
                 }
             }

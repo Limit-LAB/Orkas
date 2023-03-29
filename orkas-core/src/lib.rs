@@ -1,5 +1,6 @@
 #![doc = include_str!("../../README.md")]
 #![cfg_attr(test, feature(is_sorted))]
+#![feature(impl_trait_projections)]
 #![feature(type_alias_impl_trait)]
 #![feature(default_free_fn)]
 #![feature(drain_filter)]
@@ -10,6 +11,7 @@
 use std::{net::SocketAddr, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
+use limlog::Reader;
 use tap::Pipe;
 use tracing::info;
 use uuid7::uuid7;
@@ -148,15 +150,20 @@ impl Handle {
         self.ctx.get_topic(topic)
     }
 
+    pub fn has_topic(&self, topic: impl AsRef<str>) -> bool {
+        self.ctx.has_topic(topic)
+    }
+
     /// Create a new topic in current node
-    pub fn new_topic(&self, topic: impl Into<String>) -> Result<()> {
+    pub async fn new_topic(&self, topic: impl Into<String>) -> Result<()> {
         let topic = topic.into();
 
         // Spawn the task and create local record
         let swim = self.make_swim(topic.clone())?.spawn();
 
         let logs = LogList::new();
-        let topic_record = Topic { swim, logs };
+        let map = limlog::Topic::builder(topic.clone())?.build().await?;
+        let topic_record = Topic { swim, logs, map };
 
         // Insert the topic record
         self.ctx.insert_topic(topic, topic_record);
@@ -182,8 +189,10 @@ impl Handle {
     pub async fn join_one(&self, topic: impl Into<String>, addr: SocketAddr) -> Result<()> {
         // TODO: use `ToSocketAddrs` instead of `SocketAddr`.
         // TODO: join with multiple initial nodes
-
         let topic = topic.into();
+        if self.has_topic(&topic) {
+            return Ok(());
+        }
 
         self.connect_to(addr).await?;
 
@@ -197,7 +206,8 @@ impl Handle {
         // Spawn the SWIM task
         let swim = swim.spawn();
         let logs = LogList::new();
-        let topic_record = Topic { swim, logs };
+        let map = limlog::Topic::builder(topic.clone())?.build().await?;
+        let topic_record = Topic { swim, logs, map };
 
         // Insert the topic record
         self.ctx.insert_topic(&topic, topic_record);
@@ -222,9 +232,5 @@ impl Handle {
             .await?;
 
         Ok(())
-    }
-
-    pub fn subscribe(&self, _topic: impl AsRef<str>) -> Result<()> {
-        todo!("Subscribe to a topic")
     }
 }

@@ -30,7 +30,7 @@ async fn run() {
 
     sleep(2 * SECOND).await;
 
-    handle_2.new_topic("test".to_owned()).unwrap();
+    handle_2.new_topic("test".to_owned()).await.unwrap();
 
     info!("joining node 1 to node 2");
 
