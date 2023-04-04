@@ -55,7 +55,7 @@ features = ["sync"]
 [dependencies.limlog]
 version = "0.3.1"
 git     = "https://github.com/Limit-LAB/limlog"
-rev     = "d95229b"
+branch  = "v0.3.1"
 
 [dev-dependencies]
 ## Time format
