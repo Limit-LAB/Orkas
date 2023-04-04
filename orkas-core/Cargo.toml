@@ -53,9 +53,9 @@ features = ["sync"]
 
 ## Persistent
 [dependencies.limlog]
-version = "0.3.0"
+version = "0.3.1"
 git     = "https://github.com/Limit-LAB/limlog"
-rev     = "17e0433cd3a5ba8dc4d69b4082f259c7cc1519cf"
+rev     = "d95229b"
 
 [dev-dependencies]
 ## Time format

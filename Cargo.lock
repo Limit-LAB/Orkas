@@ -773,8 +773,8 @@ checksum = "348108ab3fba42ec82ff6e9564fc4ca0247bdccdc68dd8af9764bbc79c3c8ffb"
 
 [[package]]
 name = "limlog"
-version = "0.3.0"
-source = "git+https://github.com/Limit-LAB/limlog?rev=17e0433cd3a5ba8dc4d69b4082f259c7cc1519cf#17e0433cd3a5ba8dc4d69b4082f259c7cc1519cf"
+version = "0.3.1"
+source = "git+https://github.com/Limit-LAB/limlog?rev=d95229b#d95229b90bae69acea88dc4b5423ca6f355eb3ec"
 dependencies = [
  "arc-swap",
  "bincode",
