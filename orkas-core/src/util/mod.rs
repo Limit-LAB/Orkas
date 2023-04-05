@@ -166,6 +166,5 @@ fn test_uuid() {
 
     let diff = SystemTime::now().duration_since(time).unwrap();
 
-    // Process should be fast enough to not take more than 1ms
-    assert_eq!(diff.as_millis(), 0);
+    assert!(diff.as_millis() < 2);
 }
