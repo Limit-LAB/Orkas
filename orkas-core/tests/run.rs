@@ -12,13 +12,13 @@ async fn run() {
 
     tracing_subscriber::fmt::init();
 
-    let node_1 = OrkasConfig::simple("127.0.0.1:0".parse().unwrap())
+    let mut node_1 = OrkasConfig::simple("127.0.0.1:0".parse().unwrap())
         .start()
         .await
         .unwrap();
 
     let handle_1 = node_1.handle();
-    let node_2 = OrkasConfig::simple("127.0.0.1:0".parse().unwrap())
+    let mut node_2 = OrkasConfig::simple("127.0.0.1:0".parse().unwrap())
         .start()
         .await
         .unwrap();
