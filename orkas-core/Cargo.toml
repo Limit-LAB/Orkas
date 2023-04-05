@@ -15,7 +15,7 @@ description = "Decentralized MQ implementation with SWIM and CRDT"
 foca = { version = "0.10.0", features = ["serde", "bincode-codec", "tracing"] }
 
 ## Runtime
-tokio   = { version = "1.25.0", features = ["net", "macros"] }
+tokio   = { version = "1.25.0", features = ["net", "macros", "time"] }
 futures = { version = "0.3.26", default-features = false, features = ["alloc"] }
 
 ## Serializer
