@@ -1,0 +1,16 @@
+[package]
+name    = "orkas-nif"
+version = "0.1.0"
+authors = ["George Miao <gm@miao.dev>"]
+edition = "2021"
+
+[lib]
+name       = "orkas_nif"
+path       = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler    = "0.27.0"
+orkas-core = { path = "../../../orkas-core" }
+tokio = { version = "1.27.0", features = ["macros", "rt", "rt-multi-thread", "signal", "time"] }
+tap = "1.0.1"
