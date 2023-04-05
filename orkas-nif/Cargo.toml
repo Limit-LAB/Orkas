@@ -1,5 +1,5 @@
 [package]
-name    = "orkas-server"
+name    = "orkas-nif"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,12 +9,6 @@ edition = "2021"
 
 ## Orkas
 orkas-core = { version = "0.1.0", path = "../orkas-core" }
-
-## Server
-axum = { version = "0.6.6", features = ["headers", "macros", "tower-log", "ws"] }
-
-## Runtime
-tokio = "1.25.0"
 
 ## Error handling
 color-eyre = { version = "0.6.2", default-features = false }
