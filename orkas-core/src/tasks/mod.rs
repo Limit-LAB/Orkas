@@ -296,8 +296,11 @@ impl Background {
     /// Wait for the background tasks to finish. Use with
     /// [`BackgroundHandle::cancel`] to gracefully shutdown the background
     /// tasks.
-    pub async fn stop(mut self) -> Vec<Result<()>> {
+    pub async fn stop(&mut self) -> Option<Vec<Result<()>>> {
         info!("Stopping background tasks...");
+        if self.stopped {
+            return None;
+        }
         self.stopped = true;
         self.ctx.close_all();
         join_all(std::mem::take(&mut self.handles))
@@ -311,5 +314,6 @@ impl Background {
                 Err(e) => bail!("Background task quit: {e}"),
             })
             .collect::<Vec<_>>()
+            .pipe(Some)
     }
 }

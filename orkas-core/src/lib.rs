@@ -57,17 +57,18 @@ impl Orkas {
         self.background.ctx()
     }
 
-    /// Initiate the background task. Some of the functions will not work if
-    /// this is not called and will return `Err` immediately.
+    /// Stop the background task gracefully. If any task was stopped, this will
+    /// return the result of such task with `Some(Vec<Result<()>>)`.
+    /// Otherwise, when the task is already stopped, a `None` will be returned.
     #[inline]
-    pub async fn stop(self) -> Vec<Result<()>> {
+    pub async fn stop(&mut self) -> Option<Vec<Result<()>>> {
         self.background.stop().await
     }
 
     /// Force stop the background task. This will not wait for the background
     /// tasks to be complete.
     #[inline]
-    pub fn force_stop(mut self) {
+    pub fn force_stop(&mut self) {
         self.background.force_stop()
     }
 
