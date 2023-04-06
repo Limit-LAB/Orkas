@@ -6,30 +6,29 @@
 #![feature(drain_filter)]
 #![feature(try_blocks)]
 #![feature(let_chains)]
-#![feature(once_cell)]
 
 use std::{net::SocketAddr, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
-use limlog::Reader;
 use tap::Pipe;
 use tracing::info;
 use uuid7::uuid7;
 
-pub use crate::model::*;
 use crate::{
+    model::{Envelope, Log, LogList, Message, Topic},
     tasks::{spawn_background, Background, ContextRef, Swim, TopicEntry},
-    util::{CRDTReader, CRDTUpdater},
 };
 
 pub mod consts;
 
 mod codec;
-mod model;
+pub mod model;
 mod tasks;
 mod util;
 
 pub use codec::{adapt, adapt_with_option, SerdeBincodeCodec};
+pub use model::OrkasConfig;
+pub use util::{CRDTReader, CRDTUpdater};
 
 /// The main struct of Orkas.
 ///

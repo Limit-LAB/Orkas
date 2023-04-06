@@ -37,6 +37,8 @@ mod bincode_option_mod {
     }
 }
 
+/// Helper function to construct a pair of stream and sink with
+/// codec deserialize to [`Envelope`] from given pair of reader and writer.
 pub fn adapt<R, W>(stream: (R, W)) -> (EnvelopeStream<R>, EnvelopeSink<W>)
 where
     R: AsyncRead,
@@ -49,6 +51,9 @@ where
     (stream, sink)
 }
 
+/// Helper function to construct a pair of stream and sink with
+/// codec deserialize to [`Envelope`] from given pair of reader and writer. This
+/// is like [`adapt`] but with a custom bincode option.
 pub fn adapt_with_option<R, W, O>(
     stream: (R, W),
     option: O,

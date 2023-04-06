@@ -8,7 +8,6 @@ use uuid7::uuid7;
 use crate::{
     codec::{bincode_option, try_decode},
     model::*,
-    Actor,
 };
 
 impl Broadcast {

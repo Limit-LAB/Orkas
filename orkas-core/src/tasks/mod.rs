@@ -20,9 +20,9 @@ use tracing::{debug, info, warn};
 use crate::{
     codec::{EnvelopeSink, EnvelopeStream},
     consts::DEFAULT_CHANNEL_SIZE,
-    model::{Actor, Envelope, State, Topic},
+    model::{Actor, Envelope, Event, State, Topic},
     util::{CRDTReader, CRDTUpdater, Flag},
-    Event, Log, LogList, OrkasConfig,
+    Log, LogList, OrkasConfig,
 };
 
 type Inbound = EnvelopeStream<OwnedReadHalf>;

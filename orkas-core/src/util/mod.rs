@@ -93,7 +93,7 @@ impl CloneableTuple for () {
     fn clone_me(self) -> Self::Owned {}
 }
 
-/// TODO: Doc
+// TODO: Doc
 pub trait CRDTUpdater {
     type Error: std::error::Error;
 
@@ -118,7 +118,7 @@ impl<E: std::error::Error, F: FnOnce(&LogList, Actor) -> std::result::Result<Opt
     }
 }
 
-/// TODO: Doc
+// TODO: Doc
 pub trait CRDTReader {
     type Return;
 

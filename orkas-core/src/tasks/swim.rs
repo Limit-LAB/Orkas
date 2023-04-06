@@ -23,12 +23,13 @@ use uuid7::{uuid7, Uuid};
 use crate::{
     codec::{bincode_option, BincodeOptions},
     consts::{DEFAULT_BUFFER_SIZE, DEFAULT_CHANNEL_SIZE},
-    model::Id,
+    model::{
+        Broadcast, BroadcastPack, BroadcastTag, Envelope, Event, Id, InternalMessage, Message,
+    },
     tasks::{
         event_aggregator, make_event_channel, Context, ContextRef, EventConsumer, EventProducer,
     },
     util::{ok_or_break, ok_or_continue, ok_or_warn},
-    Broadcast, BroadcastPack, BroadcastTag, Envelope, Event, InternalMessage, Message,
 };
 
 #[allow(clippy::upper_case_acronyms)]

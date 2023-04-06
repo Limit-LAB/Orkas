@@ -9,7 +9,10 @@ use futures::StreamExt;
 use kanal::{AsyncReceiver, AsyncSender, Sender};
 use tracing::instrument;
 
-use crate::{util::ok_or_break, Broadcast, Event, InternalMessage, OrkasConfig};
+use crate::{
+    model::{Broadcast, Event, InternalMessage, OrkasConfig},
+    util::ok_or_break,
+};
 
 pub type EventProducer = Sender<Event>;
 

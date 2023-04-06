@@ -4,12 +4,9 @@ use bytes::Bytes;
 use crdts::Dot;
 use uuid7::Uuid;
 
-use crate::{
-    model::{Id, LogList, LogOp},
-    Actor, Events,
-};
+use crate::model::{Actor, Events, Id, LogList, LogOp};
 
-/// TODO: MessageSet
+// TODO: MessageSet
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MessageSet {}
 

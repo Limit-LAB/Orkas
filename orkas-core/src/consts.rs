@@ -1,3 +1,5 @@
+//! Constants
+
 use std::time::Duration;
 
 // 256 items
