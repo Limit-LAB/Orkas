@@ -1,13 +1,12 @@
 ---
-name: "\U0001F680 Feature request"
-about: Suggest a new feature in Move
+name: "Feature request"
+about: Suggest a new feature in Orkas
 title: "[Feature Request]"
 labels: enhancement
 assignees: ''
-
 ---
 
-# 🚀 Feature Request
+# Feature Request
 
 **Is your feature request related to a problem? Please describe.**
 A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]

@@ -1,10 +1,9 @@
 ---
-name: "\U0001F41B Bug report"
-about: Create a bug report to help improve Move
+name: "Bug report"
+about: Create a bug report to help improve Orkas
 title: "[Bug]"
 labels: bug
 assignees: ''
-
 ---
 
 # 🐛 Bug
