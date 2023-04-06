@@ -168,7 +168,10 @@ fn test_serialize() {
     use crdts::{Dot, Identifier};
     use uuid7::uuid7;
 
-    use crate::{model::LogOp, Actor, Log};
+    use crate::{
+        model::{Actor, LogOp},
+        Log,
+    };
 
     let b = Broadcast::new_crdt(LogOp::Insert {
         id: Identifier::between(None, None, Dot::new(Actor::random(), 1).into()),
