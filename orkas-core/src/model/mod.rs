@@ -191,12 +191,9 @@ pub(crate) struct Topic {
 }
 
 impl Topic {
-    pub fn reader(&self) -> Reader {
-        self.map.reader()
-    }
-
-    pub fn writer(&self) -> Writer {
-        self.map.writer()
+    pub fn stop(&self) {
+        self.swim.stop();
+        self.map.stop()
     }
 }
 

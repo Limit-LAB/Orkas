@@ -125,10 +125,13 @@ impl ContextRef {
             .pipe(TopicEntry::prepare(self))
     }
 
+    /// Remove a topic from the context. This will also terminate the topic's
+    /// background tasks include swim and limlog.
     pub(crate) fn remove_topic(&self, topic: impl AsRef<str>) -> Option<TopicEntry<'_>> {
         self.topics
             .remove(topic.as_ref())
             .map(TopicEntry::prepare(self))
+            .tap_some(|x| x.entry.value().stop())
     }
 
     /// Wait for node with corresponding address to join or rejoin.
