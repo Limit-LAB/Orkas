@@ -59,11 +59,11 @@ struct HandleResource {
 }
 
 #[nif]
-fn handle(rt: ResourceArc<RuntimeResource>) -> ResourceArc<HandleResource> {
+fn create_handle(rt: ResourceArc<RuntimeResource>) -> ResourceArc<HandleResource> {
     let orkas = rt.orkas.handle();
     let rt = rt.rt.clone();
 
     HandleResource { rt, orkas }.pipe(ResourceArc::new)
 }
 
-rustler::init!("Elixir.Orkas", [init, handle], load = load);
+rustler::init!("Elixir.Orkas", [init, create_handle], load = load);

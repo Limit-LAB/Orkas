@@ -10,7 +10,8 @@ path       = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-rustler    = "0.27.0"
 orkas-core = { path = "../../../orkas-core" }
-tokio = { version = "1.27.0", features = ["macros", "rt", "rt-multi-thread", "signal", "time"] }
-tap = "1.0.1"
+tokio      = { version = "1.27.0", features = ["macros", "rt", "rt-multi-thread", "signal", "time"] }
+
+rustler = "0.27.0"
+tap     = "1.0.1"
