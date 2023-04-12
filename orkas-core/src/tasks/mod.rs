@@ -5,8 +5,7 @@ use std::{io, net::SocketAddr, ops::Deref, sync::Arc, time::Duration};
 use color_eyre::{eyre::bail, Result};
 use crdts::SyncedCmRDT;
 use crossbeam_skiplist::{map::Entry, SkipMap};
-use futures::future::join_all;
-use tap::{Pipe, Tap};
+use tap::{Pipe, Tap, TapOptional};
 use tokio::{
     net::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
@@ -14,9 +13,10 @@ use tokio::{
     },
     sync::Notify,
     task::JoinSet,
+    time::timeout,
 };
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     codec::{EnvelopeSink, EnvelopeStream},
@@ -60,7 +60,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn into_ref(self) -> ContextRef {
+    pub fn wrap(self) -> ContextRef {
         ContextRef {
             inner: Arc::new(self),
         }
@@ -222,7 +222,7 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> io::Result<Background
         config,
         cancel_token,
     }
-    .into_ref();
+    .wrap();
 
     let mut join_set = JoinSet::new();
 

@@ -1,7 +1,6 @@
 //! Models include data wrapper and type aliases used in the project.
 
 use crdts::SList;
-use limlog::{Reader, Writer};
 
 use crate::tasks::SwimJobHandle;
 

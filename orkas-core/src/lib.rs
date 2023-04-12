@@ -4,7 +4,6 @@
 #![feature(type_alias_impl_trait)]
 #![feature(default_free_fn)]
 #![feature(drain_filter)]
-#![feature(try_blocks)]
 #![feature(let_chains)]
 
 use std::{io, net::SocketAddr, time::Duration};
