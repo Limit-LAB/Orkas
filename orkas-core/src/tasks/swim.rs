@@ -193,7 +193,7 @@ impl<'a> Runtime<Id> for OrkasRuntime<'a> {
         match _notification {
             Notification::MemberUp(id) | Notification::Rejoin(id) => {
                 if let Some(waiter) = self.ctx.waiters.remove(&id.addr()) {
-                    waiter.value().notify()
+                    waiter.value().notify_waiters()
                 }
             }
             Notification::MemberDown(_) => {}

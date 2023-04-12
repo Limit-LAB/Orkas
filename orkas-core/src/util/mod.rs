@@ -1,85 +1,10 @@
-use std::{
-    fmt::Debug,
-    pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use color_eyre::Result;
-use futures::{task::AtomicWaker, Future};
-use tokio::time::{error::Elapsed, timeout};
 use uuid7::Uuid;
 
 use crate::model::{Actor, LogList, LogOp};
 
-mod_use::mod_use![macros, sorting_channel];
-
-struct FlagInner {
-    waker: AtomicWaker,
-    flagged: AtomicBool,
-}
-
-/// A one-time flag thar can only be set to true and not otherwise.
-#[derive(Clone)]
-pub struct Flag(Arc<FlagInner>);
-
-impl Debug for Flag {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Flag")
-            .field(&self.0.flagged.load(Ordering::Relaxed))
-            .finish()
-    }
-}
-impl Flag {
-    pub fn new() -> Self {
-        Self(Arc::new(FlagInner {
-            waker: AtomicWaker::new(),
-            flagged: AtomicBool::new(false),
-        }))
-    }
-
-    pub fn notify(&self) {
-        self.0.flagged.store(true, Ordering::Relaxed);
-        self.0.waker.wake();
-    }
-
-    pub async fn timeout(self, duration: Duration) -> Result<(), Elapsed> {
-        timeout(duration, self).await
-    }
-}
-
-impl Default for Flag {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Future for Flag {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        // quick check to avoid registration if already done.
-        if self.0.flagged.load(Ordering::Relaxed) {
-            self.0.flagged.store(false, Ordering::Relaxed);
-            return Poll::Ready(());
-        }
-
-        self.0.waker.register(cx.waker());
-
-        // Need to check condition **after** `register` to avoid a race
-        // condition that would result in lost notifications.
-        if self.0.flagged.load(Ordering::Relaxed) {
-            self.0.flagged.store(false, Ordering::Relaxed);
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
-    }
-}
+mod_use::mod_use![macros, retry];
 
 pub trait CloneableTuple {
     type Owned;

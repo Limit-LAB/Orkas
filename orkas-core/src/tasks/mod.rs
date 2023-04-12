@@ -12,7 +12,7 @@ use tokio::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpListener,
     },
-    task::JoinHandle,
+    sync::Notify,
 };
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{debug, info, warn};
@@ -21,7 +21,7 @@ use crate::{
     codec::{EnvelopeSink, EnvelopeStream},
     consts::DEFAULT_CHANNEL_SIZE,
     model::{Actor, Envelope, Event, State, Topic},
-    util::{CRDTReader, CRDTUpdater, Flag},
+    util::{CRDTReader, CRDTUpdater},
     Log, LogList, OrkasConfig,
 };
 
@@ -51,7 +51,7 @@ pub struct Context {
     pub msg: kanal::AsyncSender<Envelope>,
     pub conn_inbound: kanal::AsyncSender<Inbound>,
     pub conn_outbound: kanal::AsyncSender<(SocketAddr, Outbound)>,
-    pub waiters: SkipMap<SocketAddr, Flag>,
+    pub waiters: SkipMap<SocketAddr, Notify>,
     pub config: Arc<OrkasConfig>,
     topics: SkipMap<String, Topic>,
     actor: Actor,
@@ -136,13 +136,13 @@ impl ContextRef {
 
     /// Wait for node with corresponding address to join or rejoin.
     pub async fn wait_for(&self, addr: SocketAddr, dur: Duration) -> bool {
-        let f = self
-            .waiters
-            .get_or_insert_with(addr, Flag::new)
+        self.waiters
+            .get_or_insert_with(addr, Notify::new)
             .value()
-            .clone();
-
-        f.timeout(dur).await.is_ok()
+            .notified()
+            .pipe(|fut| timeout(dur, fut))
+            .await
+            .is_ok()
     }
 }
 
