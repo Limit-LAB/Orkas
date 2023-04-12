@@ -1,6 +1,6 @@
 mod_use::mod_use![conn, swim, event];
 
-use std::{net::SocketAddr, ops::Deref, sync::Arc, time::Duration};
+use std::{io, net::SocketAddr, ops::Deref, sync::Arc, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
 use crdts::SyncedCmRDT;
@@ -13,6 +13,7 @@ use tokio::{
         TcpListener,
     },
     sync::Notify,
+    task::JoinSet,
 };
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{debug, info, warn};
@@ -197,7 +198,12 @@ impl<'a> TopicEntry<'a> {
     }
 }
 
-pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
+pub async fn spawn_background(config: Arc<OrkasConfig>) -> io::Result<Background> {
+    let listener = TcpListener::bind(config.bind).await?;
+    let addr = listener.local_addr()?.tap(|address| {
+        debug!(?address, "Listening");
+    });
+
     let (conn_inbound, inbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
     let (conn_outbound, outbound_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
     let (msg, msg_rx) = kanal::bounded_async(DEFAULT_CHANNEL_SIZE);
@@ -218,23 +224,17 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
     }
     .into_ref();
 
-    let listener = TcpListener::bind(ctx.config.bind).await?;
-    let addr = listener.local_addr()?.tap(|addr| {
-        debug!(?addr, "Listening on");
-    });
+    let mut join_set = JoinSet::new();
 
-    let listener = listener
-        .pipe(|l| listener_task(l, ctx.clone()))
-        .pipe(tokio::spawn);
-
-    let inbound = tokio::spawn(inbound_task(inbound_rx, ctx.clone()));
-    let outbound = tokio::spawn(outbound_task(msg_rx, outbound_rx, ctx.clone()));
+    join_set.spawn(listener_task(listener, ctx.clone()));
+    join_set.spawn(inbound_task(inbound_rx, ctx.clone()));
+    join_set.spawn(outbound_task(msg_rx, outbound_rx, ctx.clone()));
 
     Background {
         ctx,
         addr,
         stopped: false,
-        handles: vec![inbound, outbound, listener],
+        join_set,
     }
     .pipe(Ok)
 }
@@ -243,7 +243,7 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> Result<Background> {
 pub struct Background {
     ctx: ContextRef,
     addr: SocketAddr,
-    handles: Vec<JoinHandle<Result<()>>>,
+    join_set: JoinSet<Result<()>>,
     stopped: bool,
 }
 
@@ -259,9 +259,7 @@ impl Drop for Background {
 impl Background {
     /// Check if all background tasks are still running.
     pub fn is_running(&self) -> bool {
-        !(self.stopped
-            || self.ctx.cancel_token.is_cancelled()
-            || self.handles.iter().any(|x| x.is_finished()))
+        !(self.stopped || self.ctx.cancel_token.is_cancelled() || self.join_set.is_empty())
     }
 
     /// Get the context of the background tasks.
@@ -293,7 +291,7 @@ impl Background {
         }
         self.stopped = true;
         self.ctx.close_all();
-        self.handles.iter().for_each(|x| x.abort());
+        self.join_set.abort_all()
     }
 
     /// Wait for the background tasks to finish. Use with
@@ -306,17 +304,14 @@ impl Background {
         }
         self.stopped = true;
         self.ctx.close_all();
-        join_all(std::mem::take(&mut self.handles))
-            .await
-            .into_iter()
-            .map(|x| match x {
-                Ok(Ok(_)) => Ok(()),
-                // Normal error
-                Ok(Err(e)) => Err(e),
-                // Panicked or cancelled
-                Err(e) => bail!("Background task quit: {e}"),
-            })
-            .collect::<Vec<_>>()
-            .pipe(Some)
+        let res = Vec::with_capacity(self.join_set.len());
+        while let Some(res) = self.join_set.join_next().await {
+            match res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => error!("Background task failed: {}", e),
+                Err(e) => error!("Background task panicked: {}", e),
+            }
+        }
+        Some(res)
     }
 }

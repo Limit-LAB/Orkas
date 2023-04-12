@@ -1,6 +1,5 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{io, net::SocketAddr, time::Duration};
 
-use color_eyre::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{consts::MILLISECOND, Orkas};
@@ -33,7 +32,7 @@ impl OrkasConfig {
 }
 
 impl OrkasConfig {
-    pub async fn start(self) -> Result<Orkas> {
+    pub async fn start(self) -> io::Result<Orkas> {
         Orkas::start(self).await
     }
 }

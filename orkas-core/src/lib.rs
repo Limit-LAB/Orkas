@@ -7,7 +7,7 @@
 #![feature(try_blocks)]
 #![feature(let_chains)]
 
-use std::{net::SocketAddr, time::Duration};
+use std::{io, net::SocketAddr, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
 use tap::Pipe;
@@ -44,7 +44,7 @@ pub struct Orkas {
 impl Orkas {
     // TODO: more ergonomic `start_with_*` options
     #[inline]
-    pub async fn start(config: OrkasConfig) -> Result<Self> {
+    pub async fn start(config: OrkasConfig) -> io::Result<Self> {
         Self {
             background: spawn_background(config.into()).await?,
         }
