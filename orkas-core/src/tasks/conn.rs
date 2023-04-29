@@ -91,7 +91,7 @@ pub(super) async fn inbound_task(recv: AsyncReceiver<Inbound>, ctx: ContextRef) 
                     Message::Snapshot { .. } => {
                         trace!(target: "inbound", message_type = "snapshot", "Received snapshot");
 
-                        todo!();
+                        // TODO: handle snapshot
                         // let swim = handle.value().swim.clone();
                         // let new_topic = Topic {
                         //     logs: snapshot,

@@ -192,6 +192,8 @@ impl<'a> Runtime<Id> for OrkasRuntime<'a> {
     fn notify(&mut self, _notification: foca::Notification<Id>) {
         match _notification {
             Notification::MemberUp(id) | Notification::Rejoin(id) => {
+                // FIXME: `addr` in `id` may not be the same as the one in the map. Should be
+                // fixed by #14
                 if let Some(waiter) = self.ctx.waiters.remove(&id.addr()) {
                     waiter.value().notify_waiters()
                 }

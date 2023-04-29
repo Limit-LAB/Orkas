@@ -16,14 +16,14 @@ use tokio::{
     time::timeout,
 };
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
-use tracing::{debug, error, info, warn};
+use tracing::debug;
 
 use crate::{
     codec::{EnvelopeSink, EnvelopeStream},
     consts::DEFAULT_CHANNEL_SIZE,
     model::{Actor, Envelope, Event, State, Topic},
     util::{CRDTReader, CRDTUpdater},
-    Log, LogList, OrkasConfig,
+    Log, LogList, Orkas, OrkasConfig,
 };
 
 type Inbound = EnvelopeStream<OwnedReadHalf>;
@@ -54,9 +54,9 @@ pub struct Context {
     pub conn_outbound: kanal::AsyncSender<(SocketAddr, Outbound)>,
     pub waiters: SkipMap<SocketAddr, Notify>,
     pub config: Arc<OrkasConfig>,
+    pub cancel_token: CancellationToken,
     topics: SkipMap<String, Topic>,
     actor: Actor,
-    cancel_token: CancellationToken,
 }
 
 impl Context {
@@ -72,7 +72,14 @@ impl ContextRef {
         self.cancel_token.cancelled()
     }
 
-    pub fn close_all(&self) {
+    /// Cancel the background tasks.
+    pub fn cancel(&self) {
+        self.cancel_token.cancel();
+        self.topics.iter().for_each(|t| t.value().stop())
+    }
+
+    /// Stop the background tasks and channels.
+    pub fn stop(&self) {
         self.cancel_token.cancel();
         self.topics.iter().for_each(|t| t.value().swim.stop());
         self.msg.close();
@@ -198,7 +205,7 @@ impl<'a> TopicEntry<'a> {
     }
 }
 
-pub async fn spawn_background(config: Arc<OrkasConfig>) -> io::Result<Background> {
+pub async fn spawn_background(config: Arc<OrkasConfig>) -> io::Result<Orkas> {
     let listener = TcpListener::bind(config.bind).await?;
     let addr = listener.local_addr()?.tap(|address| {
         debug!(?address, "Listening");
@@ -230,88 +237,10 @@ pub async fn spawn_background(config: Arc<OrkasConfig>) -> io::Result<Background
     join_set.spawn(inbound_task(inbound_rx, ctx.clone()));
     join_set.spawn(outbound_task(msg_rx, outbound_rx, ctx.clone()));
 
-    Background {
+    Orkas {
         ctx,
         addr,
-        stopped: false,
         join_set,
     }
     .pipe(Ok)
-}
-
-// TODO: enum Status { Starting, Running, Stopped }
-pub struct Background {
-    ctx: ContextRef,
-    addr: SocketAddr,
-    join_set: JoinSet<Result<()>>,
-    stopped: bool,
-}
-
-impl Drop for Background {
-    fn drop(&mut self) {
-        if !self.stopped {
-            warn!("Background tasks are not properly stopped. Forcefully stopping.");
-            self.force_stop();
-        }
-    }
-}
-
-impl Background {
-    /// Check if all background tasks are still running.
-    pub fn is_running(&self) -> bool {
-        !(self.stopped || self.ctx.cancel_token.is_cancelled() || self.join_set.is_empty())
-    }
-
-    /// Get the context of the background tasks.
-    pub fn ctx(&self) -> &ContextRef {
-        &self.ctx
-    }
-
-    /// Get the address of the background tasks.
-    pub fn addr(&self) -> SocketAddr {
-        self.addr
-    }
-
-    /// Issue a cancellation request to the background tasks.
-    pub fn cancel(&self) {
-        self.ctx.close_all();
-    }
-
-    /// Get the cancellation token of the background tasks.
-    pub fn cancel_token(&self) -> &CancellationToken {
-        &self.ctx.cancel_token
-    }
-
-    /// Forcefully shutdown the background tasks with [`JoinHandle::abort`].
-    ///
-    /// [`JoinHandle::abort`]: tokio::task::JoinHandle::abort
-    pub fn force_stop(&mut self) {
-        if self.stopped {
-            return;
-        }
-        self.stopped = true;
-        self.ctx.close_all();
-        self.join_set.abort_all()
-    }
-
-    /// Wait for the background tasks to finish. Use with
-    /// [`BackgroundHandle::cancel`] to gracefully shutdown the background
-    /// tasks.
-    pub async fn stop(&mut self) -> Option<Vec<Result<()>>> {
-        info!("Stopping background tasks...");
-        if self.stopped {
-            return None;
-        }
-        self.stopped = true;
-        self.ctx.close_all();
-        let res = Vec::with_capacity(self.join_set.len());
-        while let Some(res) = self.join_set.join_next().await {
-            match res {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => error!("Background task failed: {}", e),
-                Err(e) => error!("Background task panicked: {}", e),
-            }
-        }
-        Some(res)
-    }
 }

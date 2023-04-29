@@ -10,17 +10,19 @@ use std::{io, net::SocketAddr, time::Duration};
 
 use color_eyre::{eyre::bail, Result};
 use tap::Pipe;
-use tracing::info;
+pub use tokio;
+use tokio::task::{JoinError, JoinSet};
+use tokio_util::sync::CancellationToken;
+use tracing::{info, log::warn};
 use uuid7::uuid7;
 
 use crate::{
     model::{Envelope, Log, LogList, Message, Topic},
-    tasks::{spawn_background, Background, ContextRef, Swim, TopicEntry},
+    tasks::{spawn_background, ContextRef, Swim, TopicEntry},
 };
 
-pub mod consts;
-
 mod codec;
+pub mod consts;
 pub mod model;
 mod tasks;
 mod util;
@@ -29,6 +31,7 @@ pub use codec::{adapt, adapt_with_option, SerdeBincodeCodec};
 pub use model::OrkasConfig;
 pub use util::{CRDTReader, CRDTUpdater};
 
+// TODO: enum Status { Starting, Running, Stopped }
 /// The main struct of Orkas.
 ///
 /// This is the entry point of the library. This
@@ -37,42 +40,79 @@ pub use util::{CRDTReader, CRDTUpdater};
 /// by calling [`Orkas::handle`]. When dropped, background tasks will be stopped
 /// forcefully. To gracefully stop the background tasks, call [`Orkas::stop`].
 pub struct Orkas {
-    pub background: Background,
+    ctx: ContextRef,
+    addr: SocketAddr,
+    join_set: JoinSet<Result<()>>,
+}
+
+impl Drop for Orkas {
+    fn drop(&mut self) {
+        if self.is_running() {
+            warn!("Background tasks are not properly stopped. Forcefully stopping.");
+            self.cancel();
+        }
+    }
 }
 
 impl Orkas {
     // TODO: more ergonomic `start_with_*` options
     #[inline]
     pub async fn start(config: OrkasConfig) -> io::Result<Self> {
-        Self {
-            background: spawn_background(config.into()).await?,
-        }
-        .pipe(Ok)
+        spawn_background(config.into()).await
     }
 
-    #[inline]
-    pub(crate) fn ctx(&self) -> &ContextRef {
-        self.background.ctx()
+    /// Check if all background tasks are still running.
+    pub fn is_running(&self) -> bool {
+        !(self.ctx.cancel_token.is_cancelled() || self.join_set.is_empty())
     }
 
-    /// Stop the background task gracefully. If any task was stopped, this will
-    /// return the result of such task with `Some(Vec<Result<()>>)`.
-    /// Otherwise, when the task is already stopped, a `None` will be returned.
-    #[inline]
-    pub async fn stop(&mut self) -> Option<Vec<Result<()>>> {
-        self.background.stop().await
+    /// Get the context of the background tasks.
+    pub fn ctx(&self) -> &ContextRef {
+        &self.ctx
     }
 
-    /// Force stop the background task. This will not wait for the background
-    /// tasks to be complete.
-    #[inline]
-    pub fn force_stop(&mut self) {
-        self.background.force_stop()
-    }
-
-    #[inline]
+    /// Get the address of the background tasks.
     pub fn local_addr(&self) -> SocketAddr {
-        self.background.addr()
+        self.addr
+    }
+
+    /// Get the cancellation token of the background tasks.
+    pub fn cancel_token(&self) -> &CancellationToken {
+        &self.ctx.cancel_token
+    }
+
+    /// Issue a cancellation request to the background tasks. Use
+    /// [`Orkas::join`] to wait for the tasks to finish.
+    pub fn cancel(&self) {
+        if !self.is_running() {
+            return;
+        }
+        self.ctx.cancel();
+    }
+
+    /// Forcefully shutdown the background tasks with [`JoinHandle::abort`].
+    ///
+    /// [`JoinHandle::abort`]: tokio::task::JoinHandle::abort
+    pub fn abort(&mut self) {
+        if !self.is_running() {
+            return;
+        }
+        self.ctx.stop();
+        self.join_set.abort_all()
+    }
+
+    /// Wait for all background tasks to finish. Use [`Orkas::cancel`]
+    /// beforehand to gracefully stop the tasks.
+    pub async fn join(&mut self) -> Option<Vec<Result<Result<()>, JoinError>>> {
+        if self.join_set.is_empty() {
+            return None;
+        }
+        self.cancel();
+        let mut results = Vec::with_capacity(self.join_set.len());
+        while let Some(res) = self.join_set.join_next().await {
+            results.push(res);
+        }
+        Some(results)
     }
 
     #[inline]

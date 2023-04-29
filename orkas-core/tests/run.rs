@@ -57,6 +57,6 @@ async fn run() {
     info!(?a);
     info!(?b);
 
-    node_1.stop().await;
-    node_2.stop().await;
+    node_1.join().await;
+    node_2.join().await;
 }
